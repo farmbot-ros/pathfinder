@@ -1,0 +1,13 @@
+global:
+  ros__parameters:
+    topic_prefix: '/fb'
+
+antenna_split:
+  ros__parameters:
+    name: 'split'
+    #input_topic: '/fix'
+    gps_topic: '/fix'
+    #output_topics: ['/gps/front', '/gps/back']
+    gps_front: '/gps/front'
+    gps_back: '/gps/back'
+    kallman_type: 1
