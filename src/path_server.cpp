@@ -2,12 +2,19 @@
 #include "nav_msgs/msg/path.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/pose.hpp"
+#include "geometry_msgs/msg/point.hpp"
+#include "geometry_msgs/msg/quaternion.hpp"
 #include "sensor_msgs/msg/nav_sat_fix.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "message_filters/subscriber.h"
 #include "message_filters/synchronizer.h"
 #include "message_filters/sync_policies/approximate_time.h"
 
+#include "farmbot_interfaces/action/nav.hpp"
+#include "farmbot_interfaces/action/fibonacci.hpp"
+#include "rclcpp/rclcpp.hpp"
+#include "rclcpp_action/rclcpp_action.hpp"
+ 
 #include <iostream>
 #include <thread>
 #include <mutex>
@@ -20,8 +27,8 @@ class Locator : public rclcpp::Node {
         geometry_msgs::msg::Pose* pose;
         sensor_msgs::msg::NavSatFix* gps;
         std::vector<geometry_msgs::msg::PoseStamped>* points;
-        nav_msgs::msg::Path* path;
 
+        nav_msgs::msg::Path path;
         message_filters::Subscriber<sensor_msgs::msg::NavSatFix> fix_sub_;
         message_filters::Subscriber<nav_msgs::msg::Odometry> odom_sub_;
         std::shared_ptr<message_filters::Synchronizer<message_filters::sync_policies::ApproximateTime<sensor_msgs::msg::NavSatFix, nav_msgs::msg::Odometry>>> sync_;
@@ -52,21 +59,13 @@ class Locator : public rclcpp::Node {
             path_timer = this->create_wall_timer(std::chrono::milliseconds(1000), std::bind(&Locator::path_timer_callback, this));
         }
 
-        void set_values(
-            int* numPtr,
-            bool* inited_waypointsPtr,
-            geometry_msgs::msg::Pose* posePtr,
-            sensor_msgs::msg::NavSatFix* gpsPtr,
-            std::vector<geometry_msgs::msg::PoseStamped>* pointsPtr,
-            nav_msgs::msg::Path* pathPtr
-        ) {
+        void set_values(int* numPtr, bool* inited_waypointsPtr,  geometry_msgs::msg::Pose* posePtr, sensor_msgs::msg::NavSatFix* gpsPtr, std::vector<geometry_msgs::msg::PoseStamped>* pointsPtr ) {
             RCLCPP_INFO(this->get_logger(), "Setting values");
             numberPtr = numPtr;
             inited_waypoints = inited_waypointsPtr;
             pose = posePtr;
             gps = gpsPtr;
             points = pointsPtr;
-            path = pathPtr;
         }
 
         void change_values() {
@@ -97,18 +96,18 @@ class Locator : public rclcpp::Node {
         }
         void path_timer_callback(){
             std::lock_guard<std::mutex> lock(mtx);
-            path->header.stamp = this->now();
-            path->header.frame_id = "map";
-            if (points && inited_waypoints){
+            path.header.stamp = this->now();
+            path.header.frame_id = "map";
+            if (points && *inited_waypoints){
                 for (auto &i : *points){
                     geometry_msgs::msg::PoseStamped pose;
-                    pose.header = path->header;
+                    pose.header = path.header;
                     pose.pose.position.x = i.pose.position.x;
                     pose.pose.position.y = i.pose.position.y;
-                    path->poses.push_back(pose);
+                    path.poses.push_back(pose);
                 }
+                path_pub->publish(path);
             }
-            path_pub->publish(*path);
         }
 };
 
@@ -119,33 +118,108 @@ class Navigator : public rclcpp::Node {
         geometry_msgs::msg::Pose* pose;
         sensor_msgs::msg::NavSatFix* gps;
         std::vector<geometry_msgs::msg::PoseStamped>* points;
-        nav_msgs::msg::Path* path;
 
         std::mutex mtx;
         rclcpp::TimerBase::SharedPtr timer_;
 
-    public:
-        Navigator() : Node("path_server_2"){
-            timer_ = this->create_wall_timer(std::chrono::milliseconds(500), std::bind(&Navigator::readValues, this));
-        }
+        geometry_msgs::msg::Point current_pose_;
+        geometry_msgs::msg::Quaternion current_orientation_;
+        geometry_msgs::msg::Point target_pose_;
 
-        void set_values(
-            int* numPtr,
-            bool* inited_waypointsPtr,
-            geometry_msgs::msg::Pose* posePtr,
-            sensor_msgs::msg::NavSatFix* gpsPtr,
-            std::vector<geometry_msgs::msg::PoseStamped>* pointsPtr,
-            nav_msgs::msg::Path* pathPtr
-        ) {
+        //action_server
+        using Fibonacci = farmbot_interfaces::action::Fibonacci;
+        using GoalHandleFibonacci = rclcpp_action::ServerGoalHandle<Fibonacci>;
+        rclcpp_action::Server<Fibonacci>::SharedPtr action_server_;
+    public:
+        void set_values(int* numPtr, bool* inited_waypointsPtr,  geometry_msgs::msg::Pose* posePtr, sensor_msgs::msg::NavSatFix* gpsPtr, std::vector<geometry_msgs::msg::PoseStamped>* pointsPtr ) {
             RCLCPP_INFO(this->get_logger(), "Setting values");
             numberPtr = numPtr;
             inited_waypoints = inited_waypointsPtr;
             pose = posePtr;
             gps = gpsPtr;
             points = pointsPtr;
-            path = pathPtr;
         }
 
+        explicit Navigator(const rclcpp::NodeOptions & options = rclcpp::NodeOptions()): Node("path_server_2", options) {
+            using namespace std::placeholders;
+            timer_ = this->create_wall_timer(std::chrono::milliseconds(500), std::bind(&Navigator::readValues, this));
+
+            this->action_server_ = rclcpp_action::create_server<Fibonacci>(this, "fibonacci",
+            std::bind(&Navigator::handle_goal, this, _1, _2),
+            std::bind(&Navigator::handle_cancel, this, _1),
+            std::bind(&Navigator::handle_accepted, this, _1));
+        }
+    private:
+        rclcpp_action::GoalResponse handle_goal(const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const Fibonacci::Goal> goal){
+            RCLCPP_INFO(this->get_logger(), "Received goal request with order %d", goal->order);
+            (void)uuid;
+            return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+        }
+
+        rclcpp_action::CancelResponse handle_cancel(const std::shared_ptr<GoalHandleFibonacci> goal_handle){
+            RCLCPP_INFO(this->get_logger(), "Received request to cancel goal");
+            (void)goal_handle;
+            return rclcpp_action::CancelResponse::ACCEPT;
+        }
+
+        void handle_accepted(const std::shared_ptr<GoalHandleFibonacci> goal_handle){
+            using namespace std::placeholders;
+            // this needs to return quickly to avoid blocking the executor, so spin up a new thread
+            std::thread{std::bind(&Navigator::execute, this, _1), goal_handle}.detach();
+        }
+
+        void execute(const std::shared_ptr<GoalHandleFibonacci> goal_handle){
+            RCLCPP_INFO(this->get_logger(), "Executing goal");
+            rclcpp::Rate loop_rate(1);
+            const auto goal = goal_handle->get_goal();
+            auto feedback = std::make_shared<Fibonacci::Feedback>();
+            auto & sequence = feedback->partial_sequence;
+            sequence.push_back(0);
+            sequence.push_back(1);
+            auto result = std::make_shared<Fibonacci::Result>();
+
+            for (int i = 1; (i < goal->order) && rclcpp::ok(); ++i) {
+            // Check if there is a cancel request
+            if (goal_handle->is_canceling()) {
+                result->sequence = sequence;
+                goal_handle->canceled(result);
+                RCLCPP_INFO(this->get_logger(), "Goal canceled");
+                return;
+            }
+            // Update sequence
+            sequence.push_back(sequence[i] + sequence[i - 1]);
+            // Publish feedback
+            goal_handle->publish_feedback(feedback);
+            RCLCPP_INFO(this->get_logger(), "Publish feedback");
+
+            loop_rate.sleep();
+            }
+
+            // Check if goal is done
+            if (rclcpp::ok()) {
+            result->sequence = sequence;
+            goal_handle->succeed(result);
+            RCLCPP_INFO(this->get_logger(), "Goal succeeded");
+            }
+        }
+        
+        std::array<double, 3> get_nav_params(double angle_max=0.4, double velocity_max=0.3) {
+            double distance = std::sqrt(
+                std::pow(target_pose_.x - current_pose_.x, 2) + 
+                std::pow(target_pose_.y - current_pose_.y, 2));
+            double velocity = 0.2 * distance;
+            double preheading = std::atan2(
+                target_pose_.y - current_pose_.y, 
+                target_pose_.x - current_pose_.x);
+            double orientation = std::atan2(2 * (current_orientation_.w * current_orientation_.z + 
+                                                current_orientation_.x * current_orientation_.y), 
+                                            1 - 2 * (std::pow(current_orientation_.y, 2) + std::pow(current_orientation_.z, 2)));
+            double heading = preheading - orientation;
+            double heading_corrected = std::atan2(std::sin(heading), std::cos(heading));
+            double angular = std::max(-angle_max, std::min(heading_corrected, angle_max));
+            velocity = std::max(-velocity_max, std::min(velocity, velocity_max));
+            return {velocity, angular, distance};
+        }
         void readValues() {
             std::lock_guard<std::mutex> lock(mtx);
             if (numberPtr) {
@@ -162,12 +236,11 @@ int main(int argc, char * argv[]){
     geometry_msgs::msg::Pose pose;
     sensor_msgs::msg::NavSatFix gps;
     std::vector<geometry_msgs::msg::PoseStamped> points;
-    nav_msgs::msg::Path path;
 
     auto modifier = std::make_shared<Locator>();
-    modifier->set_values(&five, &inited_waypoints, &pose, &gps, &points, &path);
+    modifier->set_values(&five, &inited_waypoints, &pose, &gps, &points);
     auto reader = std::make_shared<Navigator>();
-    reader->set_values(&five, &inited_waypoints, &pose, &gps, &points, &path);
+    reader->set_values(&five, &inited_waypoints, &pose, &gps, &points);
 
     rclcpp::executors::MultiThreadedExecutor executor;
     executor.add_node(modifier);
@@ -181,65 +254,3 @@ int main(int argc, char * argv[]){
     }
     return 0;
 }
-
-
-// class GetThePosition: public rclcpp::Node{
-//     private:
-//         nav_msgs::msg::Path path;
-//         bool inited_waypoints;
-//         message_filters::Subscriber<nav_msgs::msg::Odometry> odom_sub;
-//         message_filters::Subscriber<sensor_msgs::msg::NavSatFix> gps_sub;
-//         typedef message_filters::sync_policies::ApproximateTime<nav_msgs::msg::Odometry, sensor_msgs::msg::NavSatFix> MySyncPolicy;
-//         message_filters::Synchronizer<MySyncPolicy> sync{MySyncPolicy(10), odom_sub, gps_sub};
-//         rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub;
-//         rclcpp::TimerBase::SharedPtr path_timer;
-//         geometry_msgs::msg::Pose pose;
-//         sensor_msgs::msg::NavSatFix gps;
-//         std::vector<geometry_msgs::msg::PoseStamped> points;
-
-//     public:
-//         GetThePosition(): Node("get_the_position"){
-//             inited_waypoints = false;
-//             path_pub = this->create_publisher<nav_msgs::msg::Path>("/fix/waypoints", 10);
-
-//             odom_sub.subscribe(this, "/fix/odom");
-//             gps_sub.subscribe(this, "/fix/gps");
-//             sync.registerCallback(&GetThePosition::pose_callback, this);
-//             path_timer = this->create_wall_timer(2000ms, std::bind(&GetThePosition::path_callback, this));
-//         }
-
-//     private:
-//         void path_callback(){
-//             path.header.stamp = this->now();
-//             path.header.frame_id = "map";
-//             if (points && !inited_waypoints){
-//                 for (auto &i : points){
-//                     geometry_msgs::msg::PoseStamped pose;
-//                     pose.header = path.header;
-//                     pose.pose.position.x = i.pose.position.x;
-//                     pose.pose.position.y = i.pose.position.y;
-//                     path.poses.push_back(pose);
-//                 }
-//                 inited_waypoints = true;
-//             }
-//             path_pub->publish(path);
-//         }
-
-//         void pose_callback(const nav_msgs::msg::Odometry::SharedPtr &odom_msg, const sensor_msgs::msg::NavSatFix::SharedPtr &gps_msg){
-//             pose.position = odom_msg->pose.pose.position;
-//             pose.orientation = odom_msg->pose.pose.orientation;
-//             gps = *gps_msg;
-//         }
-// };
-
-// int main(int argc, char *argv[]) {
-//     rclcpp::init(argc, argv);
-//     rclcpp::NodeOptions options;
-//     auto node = std::make_shared<rclcpp::Node>("test", options);
-//     rclcpp::executors::SingleThreadedExecutor exec;
-//     exec.add_node(node);
-//     exec.spin();
-//     rclcpp::shutdown();
-//     return 0;
-// }
-
