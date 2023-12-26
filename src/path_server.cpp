@@ -40,6 +40,7 @@ class Navigator : public rclcpp::Node {
         //action_server
         using TheAction = farmbot_interfaces::action::Nav;
         using GoalHandle = rclcpp_action::ServerGoalHandle<TheAction>;
+        std::shared_ptr<GoalHandle> handeler_;
         rclcpp_action::Server<TheAction>::SharedPtr action_server_;
     public:
         explicit Navigator(const rclcpp::NodeOptions & options = rclcpp::NodeOptions()): Node("path_server", options) {
@@ -71,25 +72,13 @@ class Navigator : public rclcpp::Node {
     
     private:
         void sync_callback(const sensor_msgs::msg::NavSatFix::ConstSharedPtr& fix, const nav_msgs::msg::Odometry::ConstSharedPtr& odom) {
-            RCLCPP_INFO(this->get_logger(), "Sync callback");
+            // RCLCPP_INFO(this->get_logger(), "Sync callback");
             current_pose_ = odom->pose.pose;
             current_gps_ = *fix;
         }
 
         rclcpp_action::GoalResponse handle_goal(const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const TheAction::Goal> goal){
-            path_nav.poses.clear();
-            geometry_msgs::msg::PoseStamped temp_current_pose;
-            temp_current_pose.header.stamp = this->now();
-            temp_current_pose.header.frame_id = "map";
-            temp_current_pose.pose = current_pose_;
-            path_nav.poses.push_back(temp_current_pose);
-            for (const geometry_msgs::msg::PoseStamped& element : goal->initial_path.poses) {
-                auto a_pose = element;
-                a_pose.header.stamp = this->now();
-                a_pose.header.frame_id = "map";
-                path_nav.poses.push_back(a_pose);
-            }
-            inited_waypoints = true;
+            goal->initial_path.poses;
             RCLCPP_INFO(this->get_logger(), "Received goal request");
             (void)uuid;
             return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
@@ -102,35 +91,51 @@ class Navigator : public rclcpp::Node {
         }
 
         void handle_accepted(const std::shared_ptr<GoalHandle> goal_handle){
-            using namespace std::placeholders;
+            if (handeler_ && handeler_->is_active()) {
+                RCLCPP_INFO(this->get_logger(), "ABORTING PREVIOUS GOAL, QUEING NEW ONE...");
+                stop_moving();
+                handeler_->abort(std::make_shared<TheAction::Result>());
+            }
+            handeler_ = goal_handle;
             // this needs to return quickly to avoid blocking the executor, so spin up a new thread
-            std::thread{std::bind(&Navigator::execute, this, _1), goal_handle}.detach();
+            std::thread{std::bind(&Navigator::execute, this, std::placeholders::_1), goal_handle}.detach();
         }
 
         void execute(const std::shared_ptr<GoalHandle> goal_handle){
-            RCLCPP_INFO(this->get_logger(), "Executing goal");
+            // RCLCPP_INFO(this->get_logger(), "Executing goal");
             const auto goal = goal_handle->get_goal();
             auto feedback = std::make_shared<TheAction::Feedback>();
             auto result = std::make_shared<TheAction::Result>();
 
-            std_msgs::msg::Empty empty_msg;
-            rclcpp::Rate loop_rate(1);
-            while (rclcpp::ok()){
-                if (goal_handle->is_canceling()) {
-                    result->plan_result = empty_msg;
-                    goal_handle->canceled(result);
-                    RCLCPP_INFO(this->get_logger(), "Goal canceled");
-                    return;
-                }
+            if (goal->abort.data) {
+                stop_moving();
+                result->plan_result = std_msgs::msg::Empty();
+                goal_handle->abort(result);
+                return;
+            }
+            for (auto a_pose: path_setter(goal->initial_path.poses)) {
+                rclcpp::Rate loop_rate(1);
+                while (rclcpp::ok()){
+                    if (goal_handle->is_canceling()) {
+                        result->plan_result = std_msgs::msg::Empty();
+                        stop_moving();
+                        goal_handle->canceled(result);
+                        return;
+                    } else if (!goal_handle->is_active()){
+                        result->plan_result = std_msgs::msg::Empty();
+                        stop_moving();
+                        return;
+                    }
 
-                RCLCPP_INFO(this->get_logger(), "Publish feedback");
-                goal_handle->publish_feedback(feedback);
-                loop_rate.sleep();
+                    // RCLCPP_INFO(this->get_logger(), "Publish feedback");
+                    goal_handle->publish_feedback(feedback);
+                    loop_rate.sleep();
+                }
             }
 
             // Check if goal is done
             if (rclcpp::ok()) {
-                result->plan_result = empty_msg;
+                result->plan_result = std_msgs::msg::Empty();
                 goal_handle->succeed(result);
                 RCLCPP_INFO(this->get_logger(), "Goal succeeded");
             }
@@ -152,6 +157,23 @@ class Navigator : public rclcpp::Node {
             double angular = std::max(-angle_max, std::min(heading_corrected, angle_max));
             velocity = std::max(-velocity_max, std::min(velocity, velocity_max));
             return {velocity, angular, distance};
+        }
+        void stop_moving() {
+            auto twist = geometry_msgs::msg::Twist();
+            twist.linear.x = 0.0;
+            twist.angular.z = 0.0;
+            cmd_vel->publish(twist);
+        }
+        std::vector<geometry_msgs::msg::PoseStamped> path_setter(const std::vector<geometry_msgs::msg::PoseStamped>& poses){
+            path_nav.poses.clear();
+            for (const geometry_msgs::msg::PoseStamped& element : poses) {
+                geometry_msgs::msg::PoseStamped a_pose = element;
+                a_pose.header.stamp = this->now();
+                a_pose.header.frame_id = "map";
+                path_nav.poses.push_back(a_pose);
+            }
+            inited_waypoints = true;
+            return path_nav.poses;
         }
         void path_timer_callback(){
             path_nav.header.stamp = this->now();
