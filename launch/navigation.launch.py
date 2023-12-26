@@ -15,13 +15,13 @@ global_params = yaml.safe_load(open(params))['global']['ros__parameters']
 def generate_launch_description():
     ld = LaunchDescription()
 
-    antenna_split = Node(
+    path_server = Node(
         package='farmbot_navigation',
-        executable='testt',
-        name='testt',
+        executable='path_server',
+        name='path_server',
         parameters=[params, global_params]
     )
 
-    ld.add_action(antenna_split)
+    ld.add_action(path_server)
 
     return ld
