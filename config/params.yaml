@@ -2,12 +2,8 @@ global:
   ros__parameters:
     topic_prefix: '/fb'
 
-antenna_split:
+path_server:
   ros__parameters:
-    name: 'split'
-    #input_topic: '/fix'
-    gps_topic: '/fix'
-    #output_topics: ['/gps/front', '/gps/back']
-    gps_front: '/gps/front'
-    gps_back: '/gps/back'
-    kallman_type: 1
+    name: 'path_server'
+    odom_topic: '/fb/odom'
+    fix_topic: '/fb/gps'
