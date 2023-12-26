@@ -3,6 +3,7 @@
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/pose.hpp"
 #include "geometry_msgs/msg/point.hpp"
+#include "geometry_msgs/msg/twist.hpp"
 #include "geometry_msgs/msg/quaternion.hpp"
 #include "sensor_msgs/msg/nav_sat_fix.hpp"
 #include "nav_msgs/msg/odometry.hpp"
@@ -29,17 +30,17 @@ class Navigator : public rclcpp::Node {
         std::shared_ptr<message_filters::Synchronizer<message_filters::sync_policies::ApproximateTime<sensor_msgs::msg::NavSatFix, nav_msgs::msg::Odometry>>> sync_;
         
         nav_msgs::msg::Path path_nav;
-        rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub;
         rclcpp::TimerBase::SharedPtr path_timer;
+        rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub;
 
         geometry_msgs::msg::Pose current_pose_;
         sensor_msgs::msg::NavSatFix current_gps_;
         geometry_msgs::msg::Point target_pose_;
+        rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel;
         //action_server
         using TheAction = farmbot_interfaces::action::Nav;
         using GoalHandle = rclcpp_action::ServerGoalHandle<TheAction>;
         rclcpp_action::Server<TheAction>::SharedPtr action_server_;
-    
     public:
         explicit Navigator(const rclcpp::NodeOptions & options = rclcpp::NodeOptions()): Node("path_server", options) {
             this->action_server_ = rclcpp_action::create_server<TheAction>(this, "/navigation",
@@ -57,13 +58,15 @@ class Navigator : public rclcpp::Node {
                 RCLCPP_INFO(this->get_logger(), "No parameters found, using default values");
             }
 
+            path_timer = this->create_wall_timer(std::chrono::milliseconds(1000), std::bind(&Navigator::path_timer_callback, this));
             fix_sub_.subscribe(this, topic_prefix_param + "/loc/fix");
             odom_sub_.subscribe(this, topic_prefix_param + "/loc/odom");
             sync_ = std::make_shared<message_filters::Synchronizer<message_filters::sync_policies::ApproximateTime<sensor_msgs::msg::NavSatFix, nav_msgs::msg::Odometry>>>(10);
             sync_->connectInput(fix_sub_, odom_sub_);
             sync_->registerCallback(std::bind(&Navigator::sync_callback, this, std::placeholders::_1, std::placeholders::_2));
-            
-            path_timer = this->create_wall_timer(std::chrono::milliseconds(1000), std::bind(&Navigator::path_timer_callback, this));
+
+            path_pub = this->create_publisher<nav_msgs::msg::Path>(topic_prefix_param + "/nav/path", 10);
+            cmd_vel = this->create_publisher<geometry_msgs::msg::Twist>(topic_prefix_param + "/nav/cmd_vel", 10);
         }
     
     private:
@@ -74,6 +77,19 @@ class Navigator : public rclcpp::Node {
         }
 
         rclcpp_action::GoalResponse handle_goal(const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const TheAction::Goal> goal){
+            path_nav.poses.clear();
+            geometry_msgs::msg::PoseStamped temp_current_pose;
+            temp_current_pose.header.stamp = this->now();
+            temp_current_pose.header.frame_id = "map";
+            temp_current_pose.pose = current_pose_;
+            path_nav.poses.push_back(temp_current_pose);
+            for (const geometry_msgs::msg::PoseStamped& element : goal->initial_path.poses) {
+                auto a_pose = element;
+                a_pose.header.stamp = this->now();
+                a_pose.header.frame_id = "map";
+                path_nav.poses.push_back(a_pose);
+            }
+            inited_waypoints = true;
             RCLCPP_INFO(this->get_logger(), "Received goal request");
             (void)uuid;
             return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
@@ -97,12 +113,9 @@ class Navigator : public rclcpp::Node {
             auto feedback = std::make_shared<TheAction::Feedback>();
             auto result = std::make_shared<TheAction::Result>();
 
-            path_nav = goal->initial_path;
-            inited_waypoints = true;
-    
             std_msgs::msg::Empty empty_msg;
             rclcpp::Rate loop_rate(1);
-            while (true){
+            while (rclcpp::ok()){
                 if (goal_handle->is_canceling()) {
                     result->plan_result = empty_msg;
                     goal_handle->canceled(result);
