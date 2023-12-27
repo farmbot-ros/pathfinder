@@ -67,7 +67,7 @@ class Navigator : public rclcpp::Node {
             sync_->registerCallback(std::bind(&Navigator::sync_callback, this, std::placeholders::_1, std::placeholders::_2));
 
             path_pub = this->create_publisher<nav_msgs::msg::Path>(topic_prefix_param + "/nav/path", 10);
-            cmd_vel = this->create_publisher<geometry_msgs::msg::Twist>(topic_prefix_param + "/nav/cmd_vel", 10);
+            cmd_vel = this->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
         }
     
     private:
@@ -92,7 +92,8 @@ class Navigator : public rclcpp::Node {
 
         void handle_accepted(const std::shared_ptr<GoalHandle> goal_handle){
             if (handeler_ && handeler_->is_active()) {
-                RCLCPP_INFO(this->get_logger(), "ABORTING PREVIOUS GOAL, QUEING NEW ONE...");
+                RCLCPP_INFO(this->get_logger(), "ABORTING PREVIOUS GOAL...");
+                path_nav.poses.clear();
                 stop_moving();
                 handeler_->abort(std::make_shared<TheAction::Result>());
             }
@@ -106,6 +107,7 @@ class Navigator : public rclcpp::Node {
             const auto goal = goal_handle->get_goal();
             auto feedback = std::make_shared<TheAction::Feedback>();
             auto result = std::make_shared<TheAction::Result>();
+            rclcpp::Rate loop_rate(10);
 
             if (goal->abort.data) {
                 stop_moving();
@@ -114,10 +116,12 @@ class Navigator : public rclcpp::Node {
                 return;
             }
             for (auto a_pose: path_setter(goal->initial_path.poses)) {
-                rclcpp::Rate loop_rate(1);
+                target_pose_ = a_pose.pose.position;
+                RCLCPP_INFO(this->get_logger(), "Going to: %f, %f, currently at: %f, %f", target_pose_.x, target_pose_.y, current_pose_.position.x, current_pose_.position.y);
                 while (rclcpp::ok()){
                     if (goal_handle->is_canceling()) {
                         result->plan_result = std_msgs::msg::Empty();
+                        path_nav.poses.clear();
                         stop_moving();
                         goal_handle->canceled(result);
                         return;
@@ -126,13 +130,19 @@ class Navigator : public rclcpp::Node {
                         stop_moving();
                         return;
                     }
-
-                    // RCLCPP_INFO(this->get_logger(), "Publish feedback");
+                    std::array<double, 3> nav_params = get_nav_params();
+                    geometry_msgs::msg::Twist twist;
+                    twist.linear.x = nav_params[0];
+                    twist.angular.z = nav_params[1];
+                    cmd_vel->publish(twist);
+                    RCLCPP_INFO(this->get_logger(), "Twist: %f, %f", twist.linear.x, twist.angular.z);
                     goal_handle->publish_feedback(feedback);
                     loop_rate.sleep();
+                    if (nav_params[2] < 0.1) {
+                        break;
+                    }
                 }
             }
-
             // Check if goal is done
             if (rclcpp::ok()) {
                 result->plan_result = std_msgs::msg::Empty();
@@ -159,7 +169,7 @@ class Navigator : public rclcpp::Node {
             return {velocity, angular, distance};
         }
         void stop_moving() {
-            auto twist = geometry_msgs::msg::Twist();
+            geometry_msgs::msg::Twist twist;
             twist.linear.x = 0.0;
             twist.angular.z = 0.0;
             cmd_vel->publish(twist);
