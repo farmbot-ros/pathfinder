@@ -43,7 +43,11 @@ class Navigator : public rclcpp::Node {
         std::shared_ptr<GoalHandle> handeler_;
         rclcpp_action::Server<TheAction>::SharedPtr action_server_;
     public:
-        explicit Navigator(const rclcpp::NodeOptions & options = rclcpp::NodeOptions()): Node("path_server", options) {
+        Navigator(): Node("path_server",
+            rclcpp::NodeOptions()
+            .allow_undeclared_parameters(true)
+            .automatically_declare_parameters_from_overrides(true)
+        ) {
             this->action_server_ = rclcpp_action::create_server<TheAction>(this, "/navigation",
                 std::bind(&Navigator::handle_goal, this, std::placeholders::_1, std::placeholders::_2),
                 std::bind(&Navigator::handle_cancel, this, std::placeholders::_1),
