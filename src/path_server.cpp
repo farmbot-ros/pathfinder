@@ -11,7 +11,7 @@
 #include "message_filters/synchronizer.h"
 #include "message_filters/sync_policies/approximate_time.h"
 
-#include "farmbot_interfaces/action/nav.hpp"
+#include "farmbot_interfaces/action/waypoints.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "std_msgs/msg/empty.hpp"
@@ -29,7 +29,8 @@ class Navigator : public rclcpp::Node {
         message_filters::Subscriber<nav_msgs::msg::Odometry> odom_sub_;
         std::shared_ptr<message_filters::Synchronizer<message_filters::sync_policies::ApproximateTime<sensor_msgs::msg::NavSatFix, nav_msgs::msg::Odometry>>> sync_;
         
-        nav_msgs::msg::Path path_nav;
+        // nav_msgs::msg::Path path_nav;
+        farmbot_interfaces::msg::Waypoints path_nav;
         rclcpp::TimerBase::SharedPtr path_timer;
         rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub;
 
@@ -38,7 +39,7 @@ class Navigator : public rclcpp::Node {
         geometry_msgs::msg::Point target_pose_;
         rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel;
         //action_server
-        using TheAction = farmbot_interfaces::action::Nav;
+        using TheAction = farmbot_interfaces::action::Waypoints;
         using GoalHandle = rclcpp_action::ServerGoalHandle<TheAction>;
         std::shared_ptr<GoalHandle> handeler_;
         rclcpp_action::Server<TheAction>::SharedPtr action_server_;
@@ -121,6 +122,7 @@ class Navigator : public rclcpp::Node {
             }
             for (auto a_pose: path_setter(goal->initial_path.poses)) {
                 target_pose_ = a_pose.pose.position;
+                std::string current_uuid = a_pose.uuid.data;
                 RCLCPP_INFO(this->get_logger(), "Going to: %f, %f, currently at: %f, %f", target_pose_.x, target_pose_.y, current_pose_.position.x, current_pose_.position.y);
                 while (rclcpp::ok()){
                     if (goal_handle->is_canceling()) {
@@ -140,6 +142,7 @@ class Navigator : public rclcpp::Node {
                     twist.angular.z = nav_params[1];
                     cmd_vel->publish(twist);
                     RCLCPP_INFO(this->get_logger(), "Twist: %f, %f", twist.linear.x, twist.angular.z);
+                    fill_feedback(feedback, current_uuid);
                     goal_handle->publish_feedback(feedback);
                     loop_rate.sleep();
                     if (nav_params[2] < 0.1) {
@@ -153,6 +156,12 @@ class Navigator : public rclcpp::Node {
                 goal_handle->succeed(result);
                 RCLCPP_INFO(this->get_logger(), "Goal succeeded");
             }
+        }
+
+        void fill_feedback(TheAction::Feedback::SharedPtr feedback, std::string uuid=""){
+            feedback->pose = current_pose_;
+            feedback->gps = current_gps_;
+            feedback->last_uuid.data = uuid;
         }
         
         std::array<double, 3> get_nav_params(double angle_max=0.4, double velocity_max=0.3) {
@@ -178,10 +187,10 @@ class Navigator : public rclcpp::Node {
             twist.angular.z = 0.0;
             cmd_vel->publish(twist);
         }
-        std::vector<geometry_msgs::msg::PoseStamped> path_setter(const std::vector<geometry_msgs::msg::PoseStamped>& poses){
+        std::vector<farmbot_interfaces::msg::Waypoint> path_setter(const std::vector<farmbot_interfaces::msg::Waypoint>& poses){
             path_nav.poses.clear();
-            for (const geometry_msgs::msg::PoseStamped& element : poses) {
-                geometry_msgs::msg::PoseStamped a_pose = element;
+            for (const farmbot_interfaces::msg::Waypoint& element : poses) {
+                farmbot_interfaces::msg::Waypoint a_pose = element;
                 a_pose.header.stamp = this->now();
                 a_pose.header.frame_id = "map";
                 path_nav.poses.push_back(a_pose);
@@ -189,11 +198,26 @@ class Navigator : public rclcpp::Node {
             inited_waypoints = true;
             return path_nav.poses;
         }
+
+        nav_msgs::msg::Path waypoint_to_path(const std::vector<farmbot_interfaces::msg::Waypoint>& poses){
+            nav_msgs::msg::Path path;
+            path.header.stamp = this->now();
+            path.header.frame_id = "map";
+            for (const farmbot_interfaces::msg::Waypoint& element : poses) {
+                geometry_msgs::msg::PoseStamped pose;
+                pose.header.stamp = this->now();
+                pose.header.frame_id = "map";
+                pose.pose = element.pose;
+                path.poses.push_back(pose);
+            }
+            return path;
+        }
+
         void path_timer_callback(){
             path_nav.header.stamp = this->now();
             path_nav.header.frame_id = "map";
             if (inited_waypoints){
-                path_pub->publish(path_nav);
+                path_pub->publish(waypoint_to_path(path_nav.poses));
             }
         }
 };
