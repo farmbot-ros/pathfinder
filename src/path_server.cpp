@@ -37,6 +37,7 @@ class Navigator : public rclcpp::Node {
         geometry_msgs::msg::Pose current_pose_;
         sensor_msgs::msg::NavSatFix current_gps_;
         geometry_msgs::msg::Point target_pose_;
+        std::string current_uuid_ = "ZER0";
         rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel;
         //action_server
         using TheAction = farmbot_interfaces::action::Waypoints;
@@ -122,7 +123,6 @@ class Navigator : public rclcpp::Node {
             }
             for (auto a_pose: path_setter(goal->initial_path.poses)) {
                 target_pose_ = a_pose.pose.position;
-                std::string current_uuid = a_pose.uuid.data;
                 RCLCPP_INFO(this->get_logger(), "Going to: %f, %f, currently at: %f, %f", target_pose_.x, target_pose_.y, current_pose_.position.x, current_pose_.position.y);
                 while (rclcpp::ok()){
                     if (goal_handle->is_canceling()) {
@@ -141,14 +141,25 @@ class Navigator : public rclcpp::Node {
                     twist.linear.x = nav_params[0];
                     twist.angular.z = nav_params[1];
                     cmd_vel->publish(twist);
-                    RCLCPP_INFO(this->get_logger(), "Twist: %f, %f", twist.linear.x, twist.angular.z);
-                    fill_feedback(feedback, current_uuid);
+                    // RCLCPP_INFO(this->get_logger(), "Twist: %f, %f", twist.linear.x, twist.angular.z);
+                    fill_feedback(feedback, current_uuid_);
+                    RCLCPP_INFO(this->get_logger(), "Pose: (%f, %f), GPS: (%f, %f), Target: (%f, %f), Distance: %f, Target UUID: %s", 
+                        current_pose_.position.x, 
+                        current_pose_.position.y, 
+                        current_gps_.latitude, 
+                        current_gps_.longitude, 
+                        target_pose_.x, 
+                        target_pose_.y, 
+                        nav_params[2], 
+                        std::string(a_pose.uuid.data).c_str()
+                    );
                     goal_handle->publish_feedback(feedback);
                     loop_rate.sleep();
                     if (nav_params[2] < 0.1) {
                         break;
                     }
                 }
+                current_uuid_ = a_pose.uuid.data;
             }
             // Check if goal is done
             if (rclcpp::ok()) {
@@ -158,7 +169,7 @@ class Navigator : public rclcpp::Node {
             }
         }
 
-        void fill_feedback(TheAction::Feedback::SharedPtr feedback, std::string uuid=""){
+        void fill_feedback(TheAction::Feedback::SharedPtr feedback, std::string uuid="00"){
             feedback->pose = current_pose_;
             feedback->gps = current_gps_;
             feedback->last_uuid.data = uuid;
