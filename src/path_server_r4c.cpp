@@ -11,7 +11,7 @@
 #include "message_filters/synchronizer.h"
 #include "message_filters/sync_policies/approximate_time.h"
 
-#include "farmbot_interfaces/action/waypoints.hpp"
+#include "farmbot_interfaces/action/nav.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "std_msgs/msg/empty.hpp"
@@ -29,8 +29,8 @@ class Navigator : public rclcpp::Node {
         message_filters::Subscriber<nav_msgs::msg::Odometry> odom_sub_;
         std::shared_ptr<message_filters::Synchronizer<message_filters::sync_policies::ApproximateTime<sensor_msgs::msg::NavSatFix, nav_msgs::msg::Odometry>>> sync_;
         
-        // nav_msgs::msg::Path path_nav;
-        farmbot_interfaces::msg::Waypoints path_nav;
+        nav_msgs::msg::Path path_nav;
+        int16_t index_wp_reached;
         rclcpp::TimerBase::SharedPtr path_timer;
         rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub;
 
@@ -38,13 +38,13 @@ class Navigator : public rclcpp::Node {
         sensor_msgs::msg::NavSatFix current_gps_;
         geometry_msgs::msg::Twist current_twist_;
         geometry_msgs::msg::Point target_pose_;
-        std::string current_uuid_ = "ZER0";
         rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel;
         //action_server
-        using TheAction = farmbot_interfaces::action::Waypoints;
+        using TheAction = farmbot_interfaces::action::Nav;
         using GoalHandle = rclcpp_action::ServerGoalHandle<TheAction>;
         std::shared_ptr<GoalHandle> handeler_;
         rclcpp_action::Server<TheAction>::SharedPtr action_server_;
+
     public:
         Navigator(): Node("path_server",
             rclcpp::NodeOptions()
@@ -66,6 +66,7 @@ class Navigator : public rclcpp::Node {
                 RCLCPP_INFO(this->get_logger(), "No parameters found, using default values");
             }
 
+            index_wp_reached = 0;
             path_timer = this->create_wall_timer(std::chrono::milliseconds(1000), std::bind(&Navigator::path_timer_callback, this));
             fix_sub_.subscribe(this, topic_prefix_param + "/loc/fix");
             odom_sub_.subscribe(this, topic_prefix_param + "/loc/odom");
@@ -85,7 +86,7 @@ class Navigator : public rclcpp::Node {
         }
 
         rclcpp_action::GoalResponse handle_goal(const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const TheAction::Goal> goal){
-            goal->initial_path.poses;
+            goal->mission.poses;
             RCLCPP_INFO(this->get_logger(), "Received goal request");
             (void)uuid;
             return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
@@ -116,18 +117,18 @@ class Navigator : public rclcpp::Node {
             auto result = std::make_shared<TheAction::Result>();
             rclcpp::Rate loop_rate(10);
 
-            for (auto a_pose: path_setter(goal->initial_path.poses)) {
+            for (auto a_pose: path_setter(goal->mission.poses)) {
                 target_pose_ = a_pose.pose.position;
                 RCLCPP_INFO(this->get_logger(), "Going to: %f, %f, currently at: %f, %f", target_pose_.x, target_pose_.y, current_pose_.position.x, current_pose_.position.y);
                 while (rclcpp::ok()){
                     if (goal_handle->is_canceling()) {
-                        result->success = std_msgs::msg::Bool();
+                        // result->plan_result = std_msgs::msg::Empty();
                         path_nav.poses.clear();
                         stop_moving();
                         goal_handle->canceled(result);
                         return;
                     } else if (!goal_handle->is_active()){
-                        result->success = std_msgs::msg::Bool();
+                        // result->plan_result = std_msgs::msg::Empty();
                         stop_moving();
                         return;
                     }
@@ -137,40 +138,29 @@ class Navigator : public rclcpp::Node {
                     twist.angular.z = nav_params[1];
                     current_twist_ = twist;
                     cmd_vel->publish(twist);
-                    // RCLCPP_INFO(this->get_logger(), "Twist: %f, %f", twist.linear.x, twist.angular.z);
-                    fill_feedback(feedback, current_uuid_);
-                    RCLCPP_INFO(this->get_logger(), "Pose: (%f, %f), GPS: (%f, %f), Target: (%f, %f), Distance: %f, Target UUID: %s", 
-                        current_pose_.position.x, 
-                        current_pose_.position.y, 
-                        current_gps_.latitude, 
-                        current_gps_.longitude, 
-                        target_pose_.x, 
-                        target_pose_.y, 
-                        nav_params[2], 
-                        std::string(a_pose.uuid.data).c_str()
-                    );
+                    fill_feedback(feedback);
+                    RCLCPP_INFO(this->get_logger(), "Twist: %f, %f", twist.linear.x, twist.angular.z);
                     goal_handle->publish_feedback(feedback);
                     loop_rate.sleep();
                     if (nav_params[2] < 0.1) {
                         break;
                     }
                 }
-                current_uuid_ = a_pose.uuid.data;
+                index_wp_reached++;
             }
-            // Goal is done, send success message
+            // Check if goal is done
             if (rclcpp::ok()) {
-                auto message = std_msgs::msg::Bool();
-                message.data = true;
-                result->success = message;
+                // result->plan_result = std_msgs::msg::Empty();
                 goal_handle->succeed(result);
                 RCLCPP_INFO(this->get_logger(), "Goal succeeded");
             }
         }
 
-        void fill_feedback(TheAction::Feedback::SharedPtr feedback, std::string uuid="00"){
-            feedback->pose = current_pose_;
-            feedback->gps = current_gps_;
-            feedback->last_uuid.data = uuid;
+
+        void fill_feedback(TheAction::Feedback::SharedPtr feedback){
+            feedback->current_position = current_gps_;
+            feedback->current_vel = current_twist_;
+            feedback->index_wp_reached = index_wp_reached;
         }
         
         std::array<double, 3> get_nav_params(double angle_max=0.4, double velocity_max=0.3) {
@@ -196,10 +186,10 @@ class Navigator : public rclcpp::Node {
             twist.angular.z = 0.0;
             cmd_vel->publish(twist);
         }
-        std::vector<farmbot_interfaces::msg::Waypoint> path_setter(const std::vector<farmbot_interfaces::msg::Waypoint>& poses){
+        std::vector<geometry_msgs::msg::PoseStamped> path_setter(const std::vector<geometry_msgs::msg::PoseStamped>& poses){
             path_nav.poses.clear();
-            for (const farmbot_interfaces::msg::Waypoint& element : poses) {
-                farmbot_interfaces::msg::Waypoint a_pose = element;
+            for (const geometry_msgs::msg::PoseStamped& element : poses) {
+                geometry_msgs::msg::PoseStamped a_pose = element;
                 a_pose.header.stamp = this->now();
                 a_pose.header.frame_id = "map";
                 path_nav.poses.push_back(a_pose);
@@ -207,26 +197,11 @@ class Navigator : public rclcpp::Node {
             inited_waypoints = true;
             return path_nav.poses;
         }
-
-        nav_msgs::msg::Path waypoint_to_path(const std::vector<farmbot_interfaces::msg::Waypoint>& poses){
-            nav_msgs::msg::Path path;
-            path.header.stamp = this->now();
-            path.header.frame_id = "map";
-            for (const farmbot_interfaces::msg::Waypoint& element : poses) {
-                geometry_msgs::msg::PoseStamped pose;
-                pose.header.stamp = this->now();
-                pose.header.frame_id = "map";
-                pose.pose = element.pose;
-                path.poses.push_back(pose);
-            }
-            return path;
-        }
-
         void path_timer_callback(){
             path_nav.header.stamp = this->now();
             path_nav.header.frame_id = "map";
             if (inited_waypoints){
-                path_pub->publish(waypoint_to_path(path_nav.poses));
+                path_pub->publish(path_nav);
             }
         }
 };

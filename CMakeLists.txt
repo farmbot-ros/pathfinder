@@ -18,6 +18,12 @@ install(
 
 cmake_policy(SET CMP0074 NEW)
 
+set(executables
+  path_server
+  path_server_r4c
+)
+
+
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
@@ -32,9 +38,7 @@ find_package(pcl_ros REQUIRED)
 find_package(pcl_conversions REQUIRED)
 find_package(farmbot_interfaces REQUIRED)
 
-add_executable(path_server src/path_server.cpp)
-ament_target_dependencies(path_server
-  rclcpp 
+set(dependencies_ros  rclcpp 
   std_msgs
   std_srvs
   nav_msgs
@@ -58,15 +62,23 @@ include_directories(${PCL_INCLUDE_DIRS})
 link_directories(${PCL_LIBRARY_DIRS})
 add_definitions(${PCL_DEFINITIONS})
 
-target_link_libraries(path_server
+set(dependencies_sys
   fmt::fmt
   ${PCL_LIBRARIES}
   ${Eigen_LIBRARIES}
 )
 
+foreach(executable ${executables})
+  add_executable(${executable} src/${executable}.cpp)
+  ament_target_dependencies(${executable} ${dependencies_ros})
+  target_link_libraries(${executable} ${dependencies_sys})
+endforeach()
+
+
 install(TARGETS
-path_server
+  ${executables}
   DESTINATION lib/${PROJECT_NAME}
 )
+
 
 ament_package()

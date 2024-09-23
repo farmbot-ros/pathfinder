@@ -13,10 +13,12 @@ from launch.actions import OpaqueFunction
 def launch_setup(context, *args, **kwargs):
     namespace = LaunchConfiguration('namespace').perform(context)
     param_file = os.path.join(get_package_share_directory('farmbot_navigation'), 'config', 'params.yaml')
-    
+
+    robs4crops = bool(yaml.safe_load(open(param_file))['global']['ros__parameters']['r4c'])
+    executable = 'path_server' if not robs4crops else 'path_server_r4c'
     path_server = Node(
         package='farmbot_navigation',
-        executable='path_server',
+        executable=executable,
         name='path_server',
         namespace=namespace,
         parameters=[
