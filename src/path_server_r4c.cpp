@@ -15,6 +15,8 @@
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "std_msgs/msg/empty.hpp"
+
+#include "std_srvs/srv/trigger.hpp"
  
 #include <iostream>
 #include <thread>
@@ -31,6 +33,7 @@ class Navigator : public rclcpp::Node {
         
         nav_msgs::msg::Path path_nav;
         int16_t index_wp_reached;
+        std::string status;
         rclcpp::TimerBase::SharedPtr path_timer;
         rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub;
 
@@ -44,6 +47,10 @@ class Navigator : public rclcpp::Node {
         using GoalHandle = rclcpp_action::ServerGoalHandle<TheAction>;
         std::shared_ptr<GoalHandle> handeler_;
         rclcpp_action::Server<TheAction>::SharedPtr action_server_;
+        //services
+        rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr start_srv;
+        rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr pause_srv;
+        rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr stop_srv;
 
     public:
         Navigator(): Node("path_server",
@@ -67,6 +74,7 @@ class Navigator : public rclcpp::Node {
             }
 
             index_wp_reached = 0;
+            status = "idle";
             path_timer = this->create_wall_timer(std::chrono::milliseconds(1000), std::bind(&Navigator::path_timer_callback, this));
             fix_sub_.subscribe(this, topic_prefix_param + "/loc/fix");
             odom_sub_.subscribe(this, topic_prefix_param + "/loc/odom");
@@ -76,6 +84,11 @@ class Navigator : public rclcpp::Node {
 
             path_pub = this->create_publisher<nav_msgs::msg::Path>(topic_prefix_param + "/nav/path", 10);
             cmd_vel = this->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
+
+            //services
+            start_srv = this->create_service<std_srvs::srv::Trigger>(topic_prefix_param + "/Start_Srv", std::bind(&Navigator::start_callback, this, std::placeholders::_1, std::placeholders::_2));
+            pause_srv = this->create_service<std_srvs::srv::Trigger>(topic_prefix_param + "/Pause_Srv", std::bind(&Navigator::pause_callback, this, std::placeholders::_1, std::placeholders::_2));
+            stop_srv = this->create_service<std_srvs::srv::Trigger>(topic_prefix_param + "/Stop_Srv", std::bind(&Navigator::stop_callback, this, std::placeholders::_1, std::placeholders::_2));
         }
     
     private:
@@ -83,6 +96,27 @@ class Navigator : public rclcpp::Node {
             // RCLCPP_INFO(this->get_logger(), "Sync callback");
             current_pose_ = odom->pose.pose;
             current_gps_ = *fix;
+        }
+
+        void start_callback(const std::shared_ptr<std_srvs::srv::Trigger::Request> _request, std::shared_ptr<std_srvs::srv::Trigger::Response> _response) {
+            auto req = _request; // TODO: fix, this is a hack to get rid of unused variable warning
+            auto res = _response; // TODO: fix, this is a hack to get rid of unused variable warning
+            status = "running";
+            return;
+        }
+
+        void pause_callback(const std::shared_ptr<std_srvs::srv::Trigger::Request> _request, std::shared_ptr<std_srvs::srv::Trigger::Response> _response) {
+            auto req = _request; // TODO: fix, this is a hack to get rid of unused variable warning
+            auto res = _response; // TODO: fix, this is a hack to get rid of unused variable warning
+            status = "paused";
+            return;
+        }
+
+        void stop_callback(const std::shared_ptr<std_srvs::srv::Trigger::Request> _request, std::shared_ptr<std_srvs::srv::Trigger::Response> _response) {
+            auto req = _request; // TODO: fix, this is a hack to get rid of unused variable warning
+            auto res = _response; // TODO: fix, this is a hack to get rid of unused variable warning
+            status = "stopped";
+            return;
         }
 
         rclcpp_action::GoalResponse handle_goal(const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const TheAction::Goal> goal){
@@ -116,19 +150,24 @@ class Navigator : public rclcpp::Node {
             auto feedback = std::make_shared<TheAction::Feedback>();
             auto result = std::make_shared<TheAction::Result>();
             rclcpp::Rate loop_rate(10);
+            
+            while(status == "idle") {
+                loop_rate.sleep();
+                RCLCPP_INFO(this->get_logger(), "Waiting for start signal");
+            }
 
             for (auto a_pose: path_setter(goal->mission.poses)) {
                 target_pose_ = a_pose.pose.position;
                 RCLCPP_INFO(this->get_logger(), "Going to: %f, %f, currently at: %f, %f", target_pose_.x, target_pose_.y, current_pose_.position.x, current_pose_.position.y);
                 while (rclcpp::ok()){
                     if (goal_handle->is_canceling()) {
-                        // result->plan_result = std_msgs::msg::Empty();
+                        // fill_feedback(feedback);
                         path_nav.poses.clear();
                         stop_moving();
                         goal_handle->canceled(result);
                         return;
                     } else if (!goal_handle->is_active()){
-                        // result->plan_result = std_msgs::msg::Empty();
+                        // fill_feedback(feedback);
                         stop_moving();
                         return;
                     }
@@ -145,12 +184,22 @@ class Navigator : public rclcpp::Node {
                     if (nav_params[2] < 0.1) {
                         break;
                     }
+                    if (status == "paused") {
+                        stop_moving();
+                        while (status == "paused") {
+                            loop_rate.sleep();
+                        }
+                    } else if (status == "stopped") {
+                        stop_moving();
+                        goal_handle->abort(result);
+                        return;
+                    }
                 }
-                index_wp_reached++;
+                index_wp_reached++; 
             }
             // Check if goal is done
             if (rclcpp::ok()) {
-                // result->plan_result = std_msgs::msg::Empty();
+                fill_feedback(feedback);
                 goal_handle->succeed(result);
                 RCLCPP_INFO(this->get_logger(), "Goal succeeded");
             }
