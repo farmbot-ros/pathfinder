@@ -75,11 +75,7 @@ class Navigator : public rclcpp::Node {
             .allow_undeclared_parameters(true)
             .automatically_declare_parameters_from_overrides(true)
         ) {
-            this->action_server_ = rclcpp_action::create_server<TheAction>(this, "/nav/mission",
-                std::bind(&Navigator::handle_goal, this, std::placeholders::_1, std::placeholders::_2),
-                std::bind(&Navigator::handle_cancel, this, std::placeholders::_1),
-                std::bind(&Navigator::handle_accepted, this, std::placeholders::_1)
-            );
+
 
             std::string name = "path_server";
             std::string topic_prefix_param = "/fb";
@@ -89,6 +85,12 @@ class Navigator : public rclcpp::Node {
             } catch (...) {
                 RCLCPP_INFO(this->get_logger(), "No parameters found, using default values");
             }
+
+            this->action_server_ = rclcpp_action::create_server<TheAction>(this, topic_prefix_param + "/nav/mission",
+                std::bind(&Navigator::handle_goal, this, std::placeholders::_1, std::placeholders::_2),
+                std::bind(&Navigator::handle_cancel, this, std::placeholders::_1),
+                std::bind(&Navigator::handle_accepted, this, std::placeholders::_1)
+            );
 
             state = RobotState::Idle;
 
@@ -163,7 +165,7 @@ class Navigator : public rclcpp::Node {
 
         void execute(const std::shared_ptr<GoalHandle> goal_handle){
             // RCLCPP_INFO(this->get_logger(), "Executing goal");
-            rclcpp::Rate wait_rate(100);
+            rclcpp::Rate wait_rate(1000);
             while(state == RobotState::Idle){
                 wait_rate.sleep();
                 RCLCPP_INFO(this->get_logger(), "Waiting for start signal");
