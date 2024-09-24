@@ -23,6 +23,22 @@
 #include <mutex>
 #include <string>
 
+enum class RobotState {
+    Idle,
+    Running,
+    Paused,
+    Stopped
+};
+
+std::string stateToString(RobotState state) {
+    switch (state) {
+        case RobotState::Idle: return "Idle";
+        case RobotState::Running: return "Running";
+        case RobotState::Paused: return "Paused";
+        case RobotState::Stopped: return "Stopped";
+        default: return "Unknown";
+    }
+}
 
 class Navigator : public rclcpp::Node {
     private:
@@ -33,7 +49,7 @@ class Navigator : public rclcpp::Node {
         
         nav_msgs::msg::Path path_nav;
         int16_t index_wp_reached;
-        std::string status;
+        RobotState state;
         rclcpp::TimerBase::SharedPtr path_timer;
         rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub;
 
@@ -74,7 +90,7 @@ class Navigator : public rclcpp::Node {
             }
 
             index_wp_reached = 0;
-            status = "idle";
+            state = RobotState::Idle;
             path_timer = this->create_wall_timer(std::chrono::milliseconds(1000), std::bind(&Navigator::path_timer_callback, this));
             fix_sub_.subscribe(this, topic_prefix_param + "/loc/fix");
             odom_sub_.subscribe(this, topic_prefix_param + "/loc/odom");
@@ -98,25 +114,25 @@ class Navigator : public rclcpp::Node {
             current_gps_ = *fix;
         }
 
-        void start_callback(const std::shared_ptr<std_srvs::srv::Trigger::Request> _request, std::shared_ptr<std_srvs::srv::Trigger::Response> _response) {
-            auto req = _request; // TODO: fix, this is a hack to get rid of unused variable warning
-            auto res = _response; // TODO: fix, this is a hack to get rid of unused variable warning
-            status = "running";
-            return;
+        void start_callback(const std::shared_ptr<std_srvs::srv::Trigger::Request> request, std::shared_ptr<std_srvs::srv::Trigger::Response> response){
+            (void)request;
+            state = RobotState::Running;
+            response->success = true;
+            response->message = "Started";
         }
 
-        void pause_callback(const std::shared_ptr<std_srvs::srv::Trigger::Request> _request, std::shared_ptr<std_srvs::srv::Trigger::Response> _response) {
-            auto req = _request; // TODO: fix, this is a hack to get rid of unused variable warning
-            auto res = _response; // TODO: fix, this is a hack to get rid of unused variable warning
-            status = "paused";
-            return;
+        void pause_callback(const std::shared_ptr<std_srvs::srv::Trigger::Request> request, std::shared_ptr<std_srvs::srv::Trigger::Response> response){
+            (void)request;
+            state = RobotState::Paused;
+            response->success = true;
+            response->message = "Paused";
         }
 
-        void stop_callback(const std::shared_ptr<std_srvs::srv::Trigger::Request> _request, std::shared_ptr<std_srvs::srv::Trigger::Response> _response) {
-            auto req = _request; // TODO: fix, this is a hack to get rid of unused variable warning
-            auto res = _response; // TODO: fix, this is a hack to get rid of unused variable warning
-            status = "stopped";
-            return;
+        void stop_callback(const std::shared_ptr<std_srvs::srv::Trigger::Request> request, std::shared_ptr<std_srvs::srv::Trigger::Response> response){
+            (void)request;
+            state = RobotState::Stopped;
+            response->success = true;
+            response->message = "Stopped";
         }
 
         rclcpp_action::GoalResponse handle_goal(const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const TheAction::Goal> goal){
@@ -146,16 +162,18 @@ class Navigator : public rclcpp::Node {
 
         void execute(const std::shared_ptr<GoalHandle> goal_handle){
             // RCLCPP_INFO(this->get_logger(), "Executing goal");
-            const auto goal = goal_handle->get_goal();
-            auto feedback = std::make_shared<TheAction::Feedback>();
-            auto result = std::make_shared<TheAction::Result>();
-            rclcpp::Rate loop_rate(10);
-            
-            while(status == "idle") {
-                loop_rate.sleep();
+
+            rclcpp::Rate wait_rate(100);
+            while(state == RobotState::Idle){
+                wait_rate.sleep();
                 RCLCPP_INFO(this->get_logger(), "Waiting for start signal");
             }
 
+            const auto goal = goal_handle->get_goal();
+            auto feedback = std::make_shared<TheAction::Feedback>();
+            auto result = std::make_shared<TheAction::Result>();
+
+            rclcpp::Rate loop_rate(10);
             for (auto a_pose: path_setter(goal->mission.poses)) {
                 target_pose_ = a_pose.pose.position;
                 RCLCPP_INFO(this->get_logger(), "Going to: %f, %f, currently at: %f, %f", target_pose_.x, target_pose_.y, current_pose_.position.x, current_pose_.position.y);
@@ -184,12 +202,12 @@ class Navigator : public rclcpp::Node {
                     if (nav_params[2] < 0.1) {
                         break;
                     }
-                    if (status == "paused") {
+                    if (state == RobotState::Paused) {
                         stop_moving();
-                        while (status == "paused") {
-                            loop_rate.sleep();
+                        while (state == RobotState::Paused) {
+                            wait_rate.sleep();
                         }
-                    } else if (status == "stopped") {
+                    } else if (state == RobotState::Stopped) {
                         stop_moving();
                         goal_handle->abort(result);
                         return;
