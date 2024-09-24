@@ -15,6 +15,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "std_msgs/msg/empty.hpp"
+#include "std_srvs/srv/trigger.hpp"
  
 #include <iostream>
 #include <thread>
@@ -30,6 +31,7 @@ class Navigator : public rclcpp::Node {
         std::shared_ptr<message_filters::Synchronizer<message_filters::sync_policies::ApproximateTime<sensor_msgs::msg::NavSatFix, nav_msgs::msg::Odometry>>> sync_;
         
         // nav_msgs::msg::Path path_nav;
+        std::string status;
         farmbot_interfaces::msg::Waypoints path_nav;
         rclcpp::TimerBase::SharedPtr path_timer;
         rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub;
@@ -45,13 +47,18 @@ class Navigator : public rclcpp::Node {
         using GoalHandle = rclcpp_action::ServerGoalHandle<TheAction>;
         std::shared_ptr<GoalHandle> handeler_;
         rclcpp_action::Server<TheAction>::SharedPtr action_server_;
+        //services
+        rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr start_srv;
+        rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr pause_srv;
+        rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr stop_srv;
+        
     public:
         Navigator(): Node("path_server",
             rclcpp::NodeOptions()
             .allow_undeclared_parameters(true)
             .automatically_declare_parameters_from_overrides(true)
         ) {
-            this->action_server_ = rclcpp_action::create_server<TheAction>(this, "/navigation",
+            this->action_server_ = rclcpp_action::create_server<TheAction>(this, "/nav/mission",
                 std::bind(&Navigator::handle_goal, this, std::placeholders::_1, std::placeholders::_2),
                 std::bind(&Navigator::handle_cancel, this, std::placeholders::_1),
                 std::bind(&Navigator::handle_accepted, this, std::placeholders::_1)
@@ -75,6 +82,11 @@ class Navigator : public rclcpp::Node {
 
             path_pub = this->create_publisher<nav_msgs::msg::Path>(topic_prefix_param + "/nav/path", 10);
             cmd_vel = this->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
+
+            //services
+            start_srv = this->create_service<std_srvs::srv::Trigger>(topic_prefix_param + "/nav/start", std::bind(&Navigator::start_callback, this, std::placeholders::_1, std::placeholders::_2));
+            pause_srv = this->create_service<std_srvs::srv::Trigger>(topic_prefix_param + "/nav/pause", std::bind(&Navigator::pause_callback, this, std::placeholders::_1, std::placeholders::_2));
+            stop_srv = this->create_service<std_srvs::srv::Trigger>(topic_prefix_param + "/nav/stop", std::bind(&Navigator::stop_callback, this, std::placeholders::_1, std::placeholders::_2));
         }
     
     private:
@@ -82,6 +94,27 @@ class Navigator : public rclcpp::Node {
             // RCLCPP_INFO(this->get_logger(), "Sync callback");
             current_pose_ = odom->pose.pose;
             current_gps_ = *fix;
+        }
+
+        void start_callback(const std::shared_ptr<std_srvs::srv::Trigger::Request> request, std::shared_ptr<std_srvs::srv::Trigger::Response> response){
+            (void)request;
+            status = "running";
+            response->success = true;
+            response->message = "Started";
+        }
+
+        void pause_callback(const std::shared_ptr<std_srvs::srv::Trigger::Request> request, std::shared_ptr<std_srvs::srv::Trigger::Response> response){
+            (void)request;
+            status = "paused";
+            response->success = true;
+            response->message = "Paused";
+        }
+
+        void stop_callback(const std::shared_ptr<std_srvs::srv::Trigger::Request> request, std::shared_ptr<std_srvs::srv::Trigger::Response> response){
+            (void)request;
+            status = "stopped";
+            response->success = true;
+            response->message = "Stopped";
         }
 
         rclcpp_action::GoalResponse handle_goal(const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const TheAction::Goal> goal){
