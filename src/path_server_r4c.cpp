@@ -69,7 +69,7 @@ class Navigator : public rclcpp::Node {
         rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr stop_srv;
 
     public:
-        Navigator(): Node("path_server",
+        Navigator(): Node("path_server_r4c",
             rclcpp::NodeOptions()
             .allow_undeclared_parameters(true)
             .automatically_declare_parameters_from_overrides(true)
@@ -80,7 +80,7 @@ class Navigator : public rclcpp::Node {
                 std::bind(&Navigator::handle_accepted, this, std::placeholders::_1)
             );
 
-            std::string name = "path_server";
+            std::string name = "path_server_r4c";
             std::string topic_prefix_param = "/fb";
             try {
                 std::string name = this->get_parameter("name").as_string(); 
@@ -179,13 +179,13 @@ class Navigator : public rclcpp::Node {
                 RCLCPP_INFO(this->get_logger(), "Going to: %f, %f, currently at: %f, %f", target_pose_.x, target_pose_.y, current_pose_.position.x, current_pose_.position.y);
                 while (rclcpp::ok()){
                     if (goal_handle->is_canceling()) {
-                        // fill_feedback(feedback);
+                        fill_feedback(feedback);
                         path_nav.poses.clear();
                         stop_moving();
                         goal_handle->canceled(result);
                         return;
                     } else if (!goal_handle->is_active()){
-                        // fill_feedback(feedback);
+                        fill_feedback(feedback);
                         stop_moving();
                         return;
                     }
@@ -215,7 +215,7 @@ class Navigator : public rclcpp::Node {
                 }
                 index_wp_reached++; 
             }
-            // Check if goal is done
+            // Goal is done, send success message
             if (rclcpp::ok()) {
                 fill_feedback(feedback);
                 goal_handle->succeed(result);

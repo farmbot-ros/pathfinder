@@ -219,6 +219,7 @@ class Navigator : public rclcpp::Node {
                         }
                     } else if (state == RobotState::Stopped) {
                         stop_moving();
+                        result->success = std_msgs::msg::Bool();
                         goal_handle->abort(result);
                         return;
                     }
@@ -258,12 +259,14 @@ class Navigator : public rclcpp::Node {
             velocity = std::max(-velocity_max, std::min(velocity, velocity_max));
             return {velocity, angular, distance};
         }
+
         void stop_moving() {
             geometry_msgs::msg::Twist twist;
             twist.linear.x = 0.0;
             twist.angular.z = 0.0;
             cmd_vel->publish(twist);
         }
+
         std::vector<farmbot_interfaces::msg::Waypoint> path_setter(const std::vector<farmbot_interfaces::msg::Waypoint>& poses){
             path_nav.poses.clear();
             for (const farmbot_interfaces::msg::Waypoint& element : poses) {
