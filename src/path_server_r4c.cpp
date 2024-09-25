@@ -149,6 +149,8 @@ class Navigator : public rclcpp::Node {
         }
 
         void handle_accepted(const std::shared_ptr<GoalHandle> goal_handle){
+            state = RobotState::Idle;
+            index_wp_reached = 0;
             if (handeler_ && handeler_->is_active()) {
                 RCLCPP_INFO(this->get_logger(), "ABORTING PREVIOUS GOAL...");
                 path_nav.poses.clear();
@@ -162,21 +164,32 @@ class Navigator : public rclcpp::Node {
 
         void execute(const std::shared_ptr<GoalHandle> goal_handle){
             // RCLCPP_INFO(this->get_logger(), "Executing goal");
-
-            rclcpp::Rate wait_rate(100);
-            while(state == RobotState::Idle){
-                wait_rate.sleep();
-                RCLCPP_INFO(this->get_logger(), "Waiting for start signal");
-            }
-
             const auto goal = goal_handle->get_goal();
             auto feedback = std::make_shared<TheAction::Feedback>();
             auto result = std::make_shared<TheAction::Result>();
 
+            rclcpp::Rate wait_rate(1);
+            while(state == RobotState::Idle){
+                fill_feedback(feedback);
+                goal_handle->publish_feedback(feedback);
+                wait_rate.sleep();
+                RCLCPP_INFO(this->get_logger(), "Waiting for start signal");
+            }
+
             rclcpp::Rate loop_rate(10);
+            bool stop = false;
             for (auto a_pose: path_setter(goal->mission.poses)) {
                 target_pose_ = a_pose.pose.position;
                 RCLCPP_INFO(this->get_logger(), "Going to: %f, %f, currently at: %f, %f", target_pose_.x, target_pose_.y, current_pose_.position.x, current_pose_.position.y);
+                if (stop) {
+                    // path_nav.poses.clear();
+                    stop_moving();
+                    // goal_handle->publish_feedback(feedback);
+                    // goal_handle->abort(result);
+                    // state = RobotState::Idle;
+                    // index_wp_reached = 0;
+                    break;
+                } 
                 while (rclcpp::ok()){
                     if (goal_handle->is_canceling()) {
                         fill_feedback(feedback);
@@ -196,7 +209,7 @@ class Navigator : public rclcpp::Node {
                     current_twist_ = twist;
                     cmd_vel->publish(twist);
                     fill_feedback(feedback);
-                    RCLCPP_INFO(this->get_logger(), "Twist: %f, %f", twist.linear.x, twist.angular.z);
+                    RCLCPP_INFO(this->get_logger(), "Going to: %f, %f, currently at: %f, %f", target_pose_.x, target_pose_.y, current_pose_.position.x, current_pose_.position.y);
                     goal_handle->publish_feedback(feedback);
                     loop_rate.sleep();
                     if (nav_params[2] < 0.1) {
@@ -205,12 +218,15 @@ class Navigator : public rclcpp::Node {
                     if (state == RobotState::Paused) {
                         stop_moving();
                         while (state == RobotState::Paused) {
+                            fill_feedback(feedback);
+                            goal_handle->publish_feedback(feedback);
                             wait_rate.sleep();
+                            RCLCPP_INFO(this->get_logger(), "Robot is paused");
                         }
                     } else if (state == RobotState::Stopped) {
-                        stop_moving();
-                        goal_handle->abort(result);
-                        return;
+                        // stop_moving();
+                        RCLCPP_INFO(this->get_logger(), "Robot received stop signal");
+                        stop = true;
                     }
                 }
                 index_wp_reached++; 
@@ -218,8 +234,13 @@ class Navigator : public rclcpp::Node {
             // Goal is done, send success message
             if (rclcpp::ok()) {
                 fill_feedback(feedback);
+                goal_handle->publish_feedback(feedback); 
+                fill_result(result);
                 goal_handle->succeed(result);
                 RCLCPP_INFO(this->get_logger(), "Goal succeeded");
+                RCLCPP_INFO(this->get_logger(), "Last index: %d", index_wp_reached);
+                state = RobotState::Idle;
+                index_wp_reached = 0;
             }
         }
 
@@ -228,6 +249,12 @@ class Navigator : public rclcpp::Node {
             feedback->current_position = current_gps_;
             feedback->current_vel = current_twist_;
             feedback->index_wp_reached = index_wp_reached;
+        }
+
+        void fill_result(TheAction::Result::SharedPtr result){
+            result->current_position = current_gps_;
+            result->current_vel = current_twist_;
+            result->index_wp_reached = index_wp_reached;
         }
         
         std::array<double, 3> get_nav_params(double angle_max=0.4, double velocity_max=0.3) {
@@ -271,12 +298,49 @@ class Navigator : public rclcpp::Node {
                 path_pub->publish(path_nav);
             }
         }
+    public:
+        void processKeyboardInput(char key) {
+            RCLCPP_INFO(this->get_logger(), "Key Pressed: %c", key);
+            // Add your logic to handle the key press here
+        }
 };
+
+
+class KeyHandler : public rclcpp::Node {
+    public:
+        KeyHandler(): Node("key_handler") {
+            auto callback = [this](char key) {
+                this->processKeyboardInput(key);
+            };
+            RCLCPP_INFO(this->get_logger(), "Press a key to continue...");
+            std::thread([callback]() {
+                char key;
+                while (std::cin >> key) {
+                    callback(key);
+                }
+            }).detach();
+        }
+
+        void processKeyboardInput(char key) {
+            RCLCPP_INFO(this->get_logger(), "Key Pressed: %c", key);
+            // Add your logic to handle the key press here
+        }
+};
+
 
 int main(int argc, char *argv[]) {
     rclcpp::init(argc, argv);
-    auto navfix = std::make_shared<Navigator>();
-    rclcpp::spin(navfix);
+    rclcpp::executors::MultiThreadedExecutor executor;
+    auto node = std::make_shared<Navigator>();
+    // auto key_handler = std::make_shared<KeyHandler>();
+    try {
+        executor.add_node(node);
+        // executor.add_node(key_handler);
+        executor.spin();
+    } catch (const std::exception &e) {
+        RCLCPP_ERROR(node->get_logger(), e.what());
+    }
+
     rclcpp::shutdown();
     return 0;
 }
