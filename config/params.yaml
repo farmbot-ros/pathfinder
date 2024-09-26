@@ -6,5 +6,8 @@ global:
 path_server:
   ros__parameters:
     name: 'path_server'
+    autostart: true
+    max_linear_speed: 1.14
+    max_angular_speed: 1.14
     odom_topic: '/fb/odom'
     fix_topic: '/fb/gps'

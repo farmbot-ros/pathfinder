@@ -40,6 +40,14 @@ std::string stateToString(RobotState state) {
     }
 }
 
+float deg2rad(float deg) {
+    return deg * M_PI / 180;
+}
+
+float rad2deg(float rad) {
+    return rad * 180 / M_PI;
+}
+
 class Navigator : public rclcpp::Node {
     private:
         bool inited_waypoints = false;
@@ -52,6 +60,12 @@ class Navigator : public rclcpp::Node {
         RobotState state;
         rclcpp::TimerBase::SharedPtr path_timer;
         rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub;
+
+        float max_linear_speed;
+        float max_angular_speed;
+        std::string name;
+        std::string topic_prefix_param;
+        bool autostart;
 
         geometry_msgs::msg::Pose current_pose_;
         sensor_msgs::msg::NavSatFix current_gps_;
@@ -69,7 +83,7 @@ class Navigator : public rclcpp::Node {
         rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr stop_srv;
 
     public:
-        Navigator(): Node("path_server_r4c",
+        Navigator(): Node("path_server",
             rclcpp::NodeOptions()
             .allow_undeclared_parameters(true)
             .automatically_declare_parameters_from_overrides(true)
@@ -80,13 +94,31 @@ class Navigator : public rclcpp::Node {
                 std::bind(&Navigator::handle_accepted, this, std::placeholders::_1)
             );
 
-            std::string name = "path_server_r4c";
-            std::string topic_prefix_param = "/fb";
+            name = "path_server";
+            topic_prefix_param = "/fb";
+            max_linear_speed = 0.5;
+            max_angular_speed = 0.5;
+            autostart = false;
+
             try {
-                std::string name = this->get_parameter("name").as_string(); 
-                std::string topic_prefix_param = this->get_parameter("topic_prefix").as_string();
+                name = this->get_parameter("name").as_string(); 
+                topic_prefix_param = this->get_parameter("topic_prefix").as_string();
             } catch (...) {
-                RCLCPP_INFO(this->get_logger(), "No parameters found, using default values");
+                RCLCPP_WARN(this->get_logger(), "No parameters %s found, using default values", name.c_str());
+            }
+
+            try {
+                max_linear_speed = this->get_parameter("max_linear_speed").as_double();
+                max_angular_speed = this->get_parameter("max_angular_speed").as_double();
+                RCLCPP_INFO(this->get_logger(), "Max linear speed: %f, Max angular speed: %f", max_linear_speed, max_angular_speed);
+            } catch (...) {
+                RCLCPP_WARN(this->get_logger(), "Angluar or linear speed parameters not found, using default values of 0.5");
+            }
+
+            try {
+                autostart = this->get_parameter("autostart").as_bool();
+            } catch (...) {
+                RCLCPP_WARN(this->get_logger(), "Autostart parameter not found, using default value of false");
             }
 
             index_wp_reached = 0;
@@ -170,6 +202,10 @@ class Navigator : public rclcpp::Node {
 
             rclcpp::Rate wait_rate(1);
             while(state == RobotState::Idle){
+                if (autostart) {
+                    state = RobotState::Running;
+                    break;
+                }
                 fill_feedback(feedback);
                 goal_handle->publish_feedback(feedback);
                 wait_rate.sleep();
@@ -202,7 +238,7 @@ class Navigator : public rclcpp::Node {
                         stop_moving();
                         return;
                     }
-                    std::array<double, 3> nav_params = get_nav_params();
+                    std::array<double, 3> nav_params = get_nav_params(max_angular_speed, max_linear_speed);
                     geometry_msgs::msg::Twist twist;
                     twist.linear.x = nav_params[0];
                     twist.angular.z = nav_params[1];
@@ -257,7 +293,7 @@ class Navigator : public rclcpp::Node {
             result->index_wp_reached = index_wp_reached;
         }
         
-        std::array<double, 3> get_nav_params(double angle_max=0.4, double velocity_max=0.3) {
+        std::array<double, 3> get_nav_params(double angle_max=1.0, double velocity_max=1.0) {
             double distance = std::sqrt(
                 std::pow(target_pose_.x - current_pose_.position.x, 2) + 
                 std::pow(target_pose_.y - current_pose_.position.y, 2));
@@ -268,12 +304,16 @@ class Navigator : public rclcpp::Node {
             double orientation = std::atan2(2 * (current_pose_.orientation.w * current_pose_.orientation.z + 
                                                 current_pose_.orientation.x * current_pose_.orientation.y), 
                                             1 - 2 * (std::pow(current_pose_.orientation.y, 2) + std::pow(current_pose_.orientation.z, 2)));
+            RCLCPP_INFO(this->get_logger(), "Desired Heading: %f, Current Heading: %f", rad2deg(preheading), rad2deg(orientation));
             double heading = preheading - orientation;
             double heading_corrected = std::atan2(std::sin(heading), std::cos(heading));
+            //print desired heading and current heading
+            // RCLCPP_INFO(this->get_logger(), "Desired heading: %f, Current heading: %f", heading, orientation);
             double angular = std::max(-angle_max, std::min(heading_corrected, angle_max));
             velocity = std::max(-velocity_max, std::min(velocity, velocity_max));
             return {velocity, angular, distance};
         }
+
         void stop_moving() {
             geometry_msgs::msg::Twist twist;
             twist.linear.x = 0.0;
