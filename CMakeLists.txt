@@ -38,7 +38,8 @@ find_package(pcl_ros REQUIRED)
 find_package(pcl_conversions REQUIRED)
 find_package(farmbot_interfaces REQUIRED)
 
-set(dependencies_ros  rclcpp 
+set(dependencies_ros
+  rclcpp 
   std_msgs
   std_srvs
   nav_msgs

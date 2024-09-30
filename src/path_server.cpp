@@ -91,55 +91,52 @@ class Navigator : public rclcpp::Node {
             .allow_undeclared_parameters(true)
             .automatically_declare_parameters_from_overrides(true)
         ) {
-            name = "path_server";
-            topic_prefix_param = "/fb";
-            max_linear_speed = 0.5;
-            max_angular_speed = 0.5;
-            autostart = false;
-
             try {
                 name = this->get_parameter("name").as_string(); 
                 topic_prefix_param = this->get_parameter("topic_prefix").as_string();
             } catch (...) {
-                RCLCPP_WARN(this->get_logger(), "No parameters %s found, using default values", name.c_str());
+                name = "path_server";
+                topic_prefix_param = "/fb";
             }
 
             try {
                 max_linear_speed = this->get_parameter("max_linear_speed").as_double();
                 max_angular_speed = this->get_parameter("max_angular_speed").as_double();
-                RCLCPP_INFO(this->get_logger(), "Max linear speed: %f, Max angular speed: %f", max_linear_speed, max_angular_speed);
             } catch (...) {
-                RCLCPP_WARN(this->get_logger(), "Angluar or linear speed parameters not found, using default values of 0.5");
+                RCLCPP_WARN(this->get_logger(), "Parameters max_linear_speed and max_angular_speed not found, using default");
+                max_linear_speed = 0.5;
+                max_angular_speed = 0.5;
             }
+            RCLCPP_INFO(this->get_logger(), "Max linear speed: %f, Max angular speed: %f", max_linear_speed, max_angular_speed);
 
             try {
                 autostart = this->get_parameter("autostart").as_bool();
             } catch (...) {
+                autostart = false;
                 RCLCPP_WARN(this->get_logger(), "Autostart parameter not found, using default value of false");
             }
 
             state = RobotState::Idle;
-
 
             this->action_server_ = rclcpp_action::create_server<TheAction>(this, topic_prefix_param + "/nav/mission",
                 std::bind(&Navigator::handle_goal, this, std::placeholders::_1, std::placeholders::_2),
                 std::bind(&Navigator::handle_cancel, this, std::placeholders::_1),
                 std::bind(&Navigator::handle_accepted, this, std::placeholders::_1)
             );
-            path_timer = this->create_wall_timer(std::chrono::milliseconds(1000), std::bind(&Navigator::path_timer_callback, this));
             fix_sub_.subscribe(this, topic_prefix_param + "/loc/fix");
             odom_sub_.subscribe(this, topic_prefix_param + "/loc/odom");
             sync_ = std::make_shared<message_filters::Synchronizer<message_filters::sync_policies::ApproximateTime<sensor_msgs::msg::NavSatFix, nav_msgs::msg::Odometry>>>(10);
             sync_->connectInput(fix_sub_, odom_sub_);
             sync_->registerCallback(std::bind(&Navigator::sync_callback, this, std::placeholders::_1, std::placeholders::_2));
-
+            //publishers
             path_pub = this->create_publisher<nav_msgs::msg::Path>(topic_prefix_param + "/nav/path", 10);
             cmd_vel = this->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
-
             //services
             start_srv = this->create_service<std_srvs::srv::Trigger>(topic_prefix_param + "/nav/start", std::bind(&Navigator::start_callback, this, std::placeholders::_1, std::placeholders::_2));
             pause_srv = this->create_service<std_srvs::srv::Trigger>(topic_prefix_param + "/nav/pause", std::bind(&Navigator::pause_callback, this, std::placeholders::_1, std::placeholders::_2));
             stop_srv = this->create_service<std_srvs::srv::Trigger>(topic_prefix_param + "/nav/stop", std::bind(&Navigator::stop_callback, this, std::placeholders::_1, std::placeholders::_2));
+            //timer
+            path_timer = this->create_wall_timer(std::chrono::milliseconds(1000), std::bind(&Navigator::path_timer_callback, this));
         }
     
     private:
