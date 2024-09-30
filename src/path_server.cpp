@@ -40,6 +40,15 @@ std::string stateToString(RobotState state) {
     }
 }
 
+float deg2rad(float deg) {
+    return deg * M_PI / 180;
+}
+
+float rad2deg(float rad) {
+    return rad * 180 / M_PI;
+}
+
+
 class Navigator : public rclcpp::Node {
     private:
         bool inited_waypoints = false;
@@ -47,6 +56,13 @@ class Navigator : public rclcpp::Node {
         message_filters::Subscriber<nav_msgs::msg::Odometry> odom_sub_;
         std::shared_ptr<message_filters::Synchronizer<message_filters::sync_policies::ApproximateTime<sensor_msgs::msg::NavSatFix, nav_msgs::msg::Odometry>>> sync_;
         
+        rclcpp::Time initial_time;
+        float max_linear_speed;
+        float max_angular_speed;
+        std::string name;
+        std::string topic_prefix_param;
+        bool autostart;
+
         // nav_msgs::msg::Path path_nav;
         RobotState state;
         farmbot_interfaces::msg::Waypoints path_nav;
@@ -75,25 +91,41 @@ class Navigator : public rclcpp::Node {
             .allow_undeclared_parameters(true)
             .automatically_declare_parameters_from_overrides(true)
         ) {
+            name = "path_server";
+            topic_prefix_param = "/fb";
+            max_linear_speed = 0.5;
+            max_angular_speed = 0.5;
+            autostart = false;
 
-
-            std::string name = "path_server";
-            std::string topic_prefix_param = "/fb";
             try {
-                std::string name = this->get_parameter("name").as_string(); 
-                std::string topic_prefix_param = this->get_parameter("topic_prefix").as_string();
+                name = this->get_parameter("name").as_string(); 
+                topic_prefix_param = this->get_parameter("topic_prefix").as_string();
             } catch (...) {
-                RCLCPP_INFO(this->get_logger(), "No parameters found, using default values");
+                RCLCPP_WARN(this->get_logger(), "No parameters %s found, using default values", name.c_str());
             }
+
+            try {
+                max_linear_speed = this->get_parameter("max_linear_speed").as_double();
+                max_angular_speed = this->get_parameter("max_angular_speed").as_double();
+                RCLCPP_INFO(this->get_logger(), "Max linear speed: %f, Max angular speed: %f", max_linear_speed, max_angular_speed);
+            } catch (...) {
+                RCLCPP_WARN(this->get_logger(), "Angluar or linear speed parameters not found, using default values of 0.5");
+            }
+
+            try {
+                autostart = this->get_parameter("autostart").as_bool();
+            } catch (...) {
+                RCLCPP_WARN(this->get_logger(), "Autostart parameter not found, using default value of false");
+            }
+
+            state = RobotState::Idle;
+
 
             this->action_server_ = rclcpp_action::create_server<TheAction>(this, topic_prefix_param + "/nav/mission",
                 std::bind(&Navigator::handle_goal, this, std::placeholders::_1, std::placeholders::_2),
                 std::bind(&Navigator::handle_cancel, this, std::placeholders::_1),
                 std::bind(&Navigator::handle_accepted, this, std::placeholders::_1)
             );
-
-            state = RobotState::Idle;
-
             path_timer = this->create_wall_timer(std::chrono::milliseconds(1000), std::bind(&Navigator::path_timer_callback, this));
             fix_sub_.subscribe(this, topic_prefix_param + "/loc/fix");
             odom_sub_.subscribe(this, topic_prefix_param + "/loc/odom");
@@ -164,19 +196,27 @@ class Navigator : public rclcpp::Node {
         }
 
         void execute(const std::shared_ptr<GoalHandle> goal_handle){
+            initial_time = this->now();
             // RCLCPP_INFO(this->get_logger(), "Executing goal");
-            rclcpp::Rate wait_rate(1000);
-            while(state == RobotState::Idle){
-                wait_rate.sleep();
-                RCLCPP_INFO(this->get_logger(), "Waiting for start signal");
-            }
-
             const auto goal = goal_handle->get_goal();
             auto feedback = std::make_shared<TheAction::Feedback>();
             auto result = std::make_shared<TheAction::Result>();
 
+            rclcpp::Rate wait_rate(1000);
+            while(state == RobotState::Idle){
+                if (autostart) {
+                    state = RobotState::Running;
+                    break;
+                }
+                fill_feedback(feedback);
+                goal_handle->publish_feedback(feedback);
+                wait_rate.sleep();
+                RCLCPP_INFO(this->get_logger(), "Waiting for start signal");
+            }
+
             rclcpp::Rate loop_rate(10);
-            for (auto a_pose: path_setter(goal->initial_path.poses)) {
+            std::vector<farmbot_interfaces::msg::Waypoint> the_path = path_setter(goal->initial_path.poses);
+            for (auto a_pose: the_path) {
                 target_pose_ = a_pose.pose.position;
                 RCLCPP_INFO(this->get_logger(), "Going to: %f, %f, currently at: %f, %f", target_pose_.x, target_pose_.y, current_pose_.position.x, current_pose_.position.y);
                 while (rclcpp::ok()){
@@ -191,7 +231,7 @@ class Navigator : public rclcpp::Node {
                         stop_moving();
                         return;
                     }
-                    std::array<double, 3> nav_params = get_nav_params();
+                    std::array<double, 3> nav_params = get_nav_params(max_angular_speed, max_linear_speed);
                     geometry_msgs::msg::Twist twist;
                     twist.linear.x = nav_params[0];
                     twist.angular.z = nav_params[1];
@@ -199,15 +239,11 @@ class Navigator : public rclcpp::Node {
                     cmd_vel->publish(twist);
                     // RCLCPP_INFO(this->get_logger(), "Twist: %f, %f", twist.linear.x, twist.angular.z);
                     fill_feedback(feedback, current_uuid_);
-                    RCLCPP_INFO(this->get_logger(), "Pose: (%f, %f), GPS: (%f, %f), Target: (%f, %f), Distance: %f, Target UUID: %s", 
-                        current_pose_.position.x, 
-                        current_pose_.position.y, 
-                        current_gps_.latitude, 
-                        current_gps_.longitude, 
-                        target_pose_.x, 
-                        target_pose_.y, 
-                        nav_params[2], 
-                        std::string(a_pose.uuid.data).c_str()
+                    RCLCPP_INFO(this->get_logger(), "GPS: (%f, %f), Pose: (%f, %f), Target: (%f, %f), Distance: %f", 
+                        current_gps_.latitude, current_gps_.longitude, 
+                        current_pose_.position.x, current_pose_.position.y, 
+                        target_pose_.x, target_pose_.y, 
+                        nav_params[2]
                     );
                     goal_handle->publish_feedback(feedback);
                     loop_rate.sleep();
@@ -217,6 +253,8 @@ class Navigator : public rclcpp::Node {
                     if (state == RobotState::Paused) {
                         stop_moving();
                         while (state == RobotState::Paused) {
+                            fill_feedback(feedback, current_uuid_);
+                            goal_handle->publish_feedback(feedback);
                             wait_rate.sleep();
                         }
                     } else if (state == RobotState::Stopped) {
@@ -230,10 +268,9 @@ class Navigator : public rclcpp::Node {
             }
             // Goal is done, send success message
             if (rclcpp::ok()) {
-                auto message = std_msgs::msg::Bool();
-                message.data = true;
-                result->success = message;
+                fill_result(result);
                 goal_handle->succeed(result);
+                stop_moving();
                 RCLCPP_INFO(this->get_logger(), "Goal succeeded");
             }
         }
@@ -243,8 +280,13 @@ class Navigator : public rclcpp::Node {
             feedback->gps = current_gps_;
             feedback->last_uuid.data = uuid;
         }
+
+        void fill_result(TheAction::Result::SharedPtr result, bool success=true){
+            result->success.data = success;
+            result->time_it_took = this->now() - initial_time;
+        }
         
-        std::array<double, 3> get_nav_params(double angle_max=0.4, double velocity_max=0.3) {
+        std::array<double, 3> get_nav_params(double angle_max=1.0, double velocity_max=1.0) {
             double distance = std::sqrt(
                 std::pow(target_pose_.x - current_pose_.position.x, 2) + 
                 std::pow(target_pose_.y - current_pose_.position.y, 2));
@@ -255,8 +297,11 @@ class Navigator : public rclcpp::Node {
             double orientation = std::atan2(2 * (current_pose_.orientation.w * current_pose_.orientation.z + 
                                                 current_pose_.orientation.x * current_pose_.orientation.y), 
                                             1 - 2 * (std::pow(current_pose_.orientation.y, 2) + std::pow(current_pose_.orientation.z, 2)));
+            RCLCPP_INFO(this->get_logger(), "Desired Heading: %f, Current Heading: %f", rad2deg(preheading), rad2deg(orientation));
             double heading = preheading - orientation;
             double heading_corrected = std::atan2(std::sin(heading), std::cos(heading));
+            //print desired heading and current heading
+            // RCLCPP_INFO(this->get_logger(), "Desired heading: %f, Current heading: %f", heading, orientation);
             double angular = std::max(-angle_max, std::min(heading_corrected, angle_max));
             velocity = std::max(-velocity_max, std::min(velocity, velocity_max));
             return {velocity, angular, distance};
@@ -306,8 +351,14 @@ class Navigator : public rclcpp::Node {
 
 int main(int argc, char *argv[]) {
     rclcpp::init(argc, argv);
-    auto navfix = std::make_shared<Navigator>();
-    rclcpp::spin(navfix);
+    rclcpp::executors::MultiThreadedExecutor executor;
+    auto node = std::make_shared<Navigator>();
+    try {
+        executor.add_node(node);
+        executor.spin();
+    } catch (const std::exception &e) {
+        RCLCPP_ERROR(node->get_logger(), e.what());
+    }
     rclcpp::shutdown();
     return 0;
 }
