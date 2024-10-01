@@ -18,3 +18,6 @@ deadman:
     name: "deadman"
     joystick_topic: "/joy"
     deadman_button: 4
+    start_topic: "/fb/nav/start"
+    stop_topic: "/fb/nav/stop"
+    pause_topic: "/fb/nav/pause"
