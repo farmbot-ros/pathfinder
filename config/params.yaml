@@ -13,8 +13,8 @@ path_server:
     odom_topic: '/fb/odom'
     fix_topic: '/fb/gps'
 
-dead_man_switch:
+deadman:
   ros__parameters:
-    name: "dead_man_switch"
+    name: "deadman"
     joystick_topic: "/joy"
     joystick_deadman_button: 5
