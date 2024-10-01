@@ -14,6 +14,8 @@ def launch_setup(context, *args, **kwargs):
     namespace = LaunchConfiguration('namespace').perform(context)
     param_file = os.path.join(get_package_share_directory('farmbot_navigation'), 'config', 'params.yaml')
 
+    nodes_array = []
+
     robs4crops = bool(yaml.safe_load(open(param_file))['global']['ros__parameters']['r4c'])
     executable = 'path_server' if not robs4crops else 'path_server_r4c'
     path_server = Node(
@@ -28,10 +30,24 @@ def launch_setup(context, *args, **kwargs):
             yaml.safe_load(open(param_file))['global']['ros__parameters']
         ]
     )
+    nodes_array.append(path_server)
+
+    deadman = Node(
+        package='farmbot_navigation',
+        executable='deadman',
+        name='deadman',
+        namespace=namespace,
+        parameters=[
+            {"frame_prefix": namespace+"/"},
+            {"namespace": namespace},
+            yaml.safe_load(open(param_file))['deadman']['ros__parameters'],
+            yaml.safe_load(open(param_file))['global']['ros__parameters']
+        ]
+    )
+    if bool(yaml.safe_load(open(param_file))['global']['ros__parameters']['deadman']): 
+        nodes_array.append(deadman)
     
-    return [ 
-        path_server,
-    ]
+    return nodes_array
 
 
 def generate_launch_description(): 

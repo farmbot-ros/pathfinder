@@ -2,6 +2,7 @@ global:
   ros__parameters:
     topic_prefix: '/fb'
     r4c: false
+    deadman: true
 
 path_server:
   ros__parameters:
@@ -11,3 +12,12 @@ path_server:
     max_angular_speed: 1.14
     odom_topic: '/fb/odom'
     fix_topic: '/fb/gps'
+
+deadman:
+  ros__parameters:
+    name: "deadman"
+    joystick_topic: "/joy"
+    deadman_button: 4
+    start_topic: "/fb/nav/start"
+    stop_topic: "/fb/nav/stop"
+    pause_topic: "/fb/nav/pause"
