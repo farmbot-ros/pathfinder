@@ -21,6 +21,7 @@ cmake_policy(SET CMP0074 NEW)
 set(executables
   path_server
   path_server_r4c
+  deadman
 )
 
 
