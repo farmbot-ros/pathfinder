@@ -32,7 +32,20 @@ def launch_setup(context, *args, **kwargs):
     )
     nodes_array.append(path_server)
 
-    
+    deadman = Node(
+        package='farmbot_navigation',
+        executable='deadman',
+        name='deadman',
+        namespace=namespace,
+        parameters=[
+            {"frame_prefix": namespace+"/"},
+            {"namespace": namespace},
+            yaml.safe_load(open(param_file))['deadman']['ros__parameters'],
+            yaml.safe_load(open(param_file))['global']['ros__parameters']
+        ]
+    )
+    if bool(yaml.safe_load(open(param_file))['global']['ros__parameters']['deadman']): 
+        nodes_array.append(deadman)
     
     return nodes_array
 

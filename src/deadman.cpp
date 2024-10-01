@@ -5,7 +5,7 @@ class Deadman : public rclcpp::Node {
     private:
         std::string name;
         std::string topic_prefix_param;
-        std::string joy_topic;
+        std::string joystick_topic;
         int deadman_button;
 
         rclcpp::TimerBase::SharedPtr deadman_timer;
@@ -26,25 +26,27 @@ class Deadman : public rclcpp::Node {
             }
 
             try{
-                rclcpp::Parameter joy_param = this->get_parameter("joy_topic");
-                joy_topic = joy_param.as_string();
+                rclcpp::Parameter joy_param = this->get_parameter("joystick_topic");
+                joystick_topic = joy_param.as_string();
                 rclcpp::Parameter deadman_button_param = this->get_parameter("deadman_button");
                 deadman_button = deadman_button_param.as_int();
             } catch(const std::exception& e) {
                 RCLCPP_WARN(this->get_logger(), "Could not find parameters: joy_topic, deadman_button, using defaults");
-                joy_topic = topic_prefix_param + "/joy";
-                deadman_button = 5;
+                joystick_topic = topic_prefix_param + "/joy";
+                deadman_button = 4;
             }
 
             deadman_timer = this->create_wall_timer(std::chrono::milliseconds(1000), std::bind(&Deadman::deadman_timer_callback, this));
-            joy_sub = this->create_subscription<sensor_msgs::msg::Joy>(joy_topic, 10, std::bind(&Deadman::joy_callback, this, std::placeholders::_1));
+            joy_sub = this->create_subscription<sensor_msgs::msg::Joy>(joystick_topic, 10, std::bind(&Deadman::joy_callback, this, std::placeholders::_1));
         }
     private:
         void deadman_timer_callback(){
-            RCLCPP_INFO(this->get_logger(), "Deadman timer");
+            RCLCPP_INFO_ONCE(this->get_logger(), "Deadman timer is running");
+            deadman_timer->reset();
         }
 
         void joy_callback(const sensor_msgs::msg::Joy::SharedPtr msg){
+            RCLCPP_INFO(this->get_logger(), "Joy callback is running");
             if (msg->buttons[deadman_button] == 1) {
                 RCLCPP_INFO(this->get_logger(), "Deadman pressed");
             }
