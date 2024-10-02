@@ -1,7 +1,7 @@
 global:
   ros__parameters:
     topic_prefix: '/fb'
-    r4c: false
+    r4c: true
     deadman: false
 
 path_server:
