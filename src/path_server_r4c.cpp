@@ -215,9 +215,19 @@ class Navigator : public rclcpp::Node {
                 RCLCPP_INFO(this->get_logger(), "Waiting for start signal");
             }
 
-            rclcpp::Rate loop_rate(10);
             bool stop = false;
-            for (auto a_pose: path_setter(goal->mission.poses)) {
+            rclcpp::Rate loop_rate(10);
+            std::vector<geometry_msgs::msg::PoseStamped> the_path = path_setter(goal->mission.poses);
+            //if the first point is 1 meter to current position, skip it
+            if (the_path.size() > 0) {
+                target_pose_ = the_path[0].pose.position;
+                double dx = target_pose_.x - current_pose_.position.x;
+                double dy = target_pose_.y - current_pose_.position.y;
+                if (std::hypot(dx, dy) < 1.0) {
+                    the_path.erase(the_path.begin());
+                }
+            }
+            for (auto a_pose: the_path) {
                 target_pose_ = a_pose.pose.position;
                 RCLCPP_INFO(this->get_logger(), "Going to: %f, %f, currently at: %f, %f", target_pose_.x, target_pose_.y, current_pose_.position.x, current_pose_.position.y);
                 if (stop) {
