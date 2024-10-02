@@ -267,7 +267,9 @@ class Navigator : public rclcpp::Node {
             if (rclcpp::ok()) {
                 fill_result(result);
                 goal_handle->succeed(result);
+                //stop moving and clear path
                 stop_moving();
+                path_nav.poses.clear();
                 RCLCPP_INFO(this->get_logger(), "Goal succeeded");
             }
         }
@@ -282,25 +284,45 @@ class Navigator : public rclcpp::Node {
             result->success.data = success;
             result->time_it_took = this->now() - initial_time;
         }
-        
-        std::array<double, 3> get_nav_params(double angle_max=1.0, double velocity_max=1.0) {
-            double distance = std::sqrt(
-                std::pow(target_pose_.x - current_pose_.position.x, 2) + 
-                std::pow(target_pose_.y - current_pose_.position.y, 2));
-            double velocity = 0.2 * distance;
-            double preheading = std::atan2(
-                target_pose_.y - current_pose_.position.y, 
-                target_pose_.x - current_pose_.position.x);
-            double orientation = std::atan2(2 * (current_pose_.orientation.w * current_pose_.orientation.z + 
-                                                current_pose_.orientation.x * current_pose_.orientation.y), 
-                                            1 - 2 * (std::pow(current_pose_.orientation.y, 2) + std::pow(current_pose_.orientation.z, 2)));
+
+        std::array<double, 3> get_nav_params(double angle_max = 1.0,  double velocity_max = 1.0,  double velocity_scale = 0.2, bool zeroturn = true) {
+            // Calculate the difference in positions
+            double dx = target_pose_.x - current_pose_.position.x;
+            double dy = target_pose_.y - current_pose_.position.y;
+            double distance = std::sqrt(dx * dx + dy * dy);
+            // Handle the case when the robot is at the target position
+            const double epsilon = 1e-6;
+            if (distance < epsilon) {
+                return {0.0, 0.0, distance};
+            }
+            // Calculate the desired velocity (only for forward motion)
+            double velocity = velocity_scale * distance;
+            // Calculate the desired heading
+            double preheading = std::atan2(dy, dx);
+            // Convert current orientation from quaternion to yaw
+            double qx = current_pose_.orientation.x;
+            double qy = current_pose_.orientation.y;
+            double qz = current_pose_.orientation.z;
+            double qw = current_pose_.orientation.w;
+            // Convert quaternion to Euler angles
+            double siny_cosp = 2 * (qw * qz + qx * qy);
+            double cosy_cosp = 1 - 2 * (qy * qy + qz * qz);
+            double orientation = std::atan2(siny_cosp, cosy_cosp);
+            // Log the desired and current headings
             RCLCPP_INFO(this->get_logger(), "Desired Heading: %f, Current Heading: %f", rad2deg(preheading), rad2deg(orientation));
-            double heading = preheading - orientation;
-            double heading_corrected = std::atan2(std::sin(heading), std::cos(heading));
-            //print desired heading and current heading
-            // RCLCPP_INFO(this->get_logger(), "Desired heading: %f, Current heading: %f", heading, orientation);
-            double angular = std::max(-angle_max, std::min(heading_corrected, angle_max));
-            velocity = std::max(-velocity_max, std::min(velocity, velocity_max));
+            // Calculate the heading difference and normalize it
+            double heading = std::atan2(std::sin(preheading - orientation), std::cos(preheading - orientation));
+            // Handle "zeroturn" behavior
+            if (zeroturn) {
+                const double turn_threshold = 0.05;  // Threshold angle in radians
+                if (std::abs(heading) > turn_threshold) {
+                    // If the heading difference is significant, turn in place and avoid moving forward
+                    return {0.0, std::clamp(heading, -angle_max, angle_max), distance};
+                }
+            }
+            // Clamp the angular velocity and linear velocity
+            double angular = std::clamp(heading, -angle_max, angle_max);
+            velocity = std::clamp(velocity, -velocity_max, velocity_max);
             return {velocity, angular, distance};
         }
 
