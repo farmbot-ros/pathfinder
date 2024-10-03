@@ -309,47 +309,74 @@ class Navigator : public rclcpp::Node {
             result->index_wp_reached = index_wp_reached;
         }
         
-        std::array<double, 3> get_nav_params(double angle_max = 1.0,  double velocity_max = 1.0,  double velocity_scale = 0.2, bool zeroturn = true) {
+        std::array<double, 3> get_nav_params(double angle_max = 1.5,  double velocity_max = 1.0,  double velocity_scale = 0.5, bool zeroturn = true) {
             // Calculate the difference in positions
             double dx = target_pose_.x - current_pose_.position.x;
             double dy = target_pose_.y - current_pose_.position.y;
-            double distance = std::sqrt(dx * dx + dy * dy);
+            double distance = std::hypot(dx, dy);
+
             // Handle the case when the robot is at the target position
             const double epsilon = 1e-6;
             if (distance < epsilon) {
                 return {0.0, 0.0, distance};
             }
-            // Calculate the desired velocity (only for forward motion)
-            double velocity = velocity_scale * distance;
+
             // Calculate the desired heading
-            double preheading = std::atan2(dy, dx);
-            // Convert current orientation from quaternion to yaw
-            double qx = current_pose_.orientation.x;
-            double qy = current_pose_.orientation.y;
-            double qz = current_pose_.orientation.z;
-            double qw = current_pose_.orientation.w;
-            // Convert quaternion to Euler angles
-            double siny_cosp = 2 * (qw * qz + qx * qy);
-            double cosy_cosp = 1 - 2 * (qy * qy + qz * qz);
-            double orientation = std::atan2(siny_cosp, cosy_cosp);
+            double target_heading = std::atan2(dy, dx);
+
+            // Convert current orientation from quaternion to yaw using tf2
+            tf2::Quaternion q(
+                current_pose_.orientation.x,
+                current_pose_.orientation.y,
+                current_pose_.orientation.z,
+                current_pose_.orientation.w
+            );
+            double roll, pitch, yaw;
+            tf2::Matrix3x3(q).getRPY(roll, pitch, yaw);
+
+            // Calculate the heading error and wrap it to [-pi, pi]
+            double heading_error = std::remainder(target_heading - yaw, 2.0 * M_PI);
+
             // Log the desired and current headings
-            RCLCPP_INFO(this->get_logger(), "Desired Heading: %f, Current Heading: %f", rad2deg(preheading), rad2deg(orientation));
-            // Calculate the heading difference and normalize it
-            double heading = std::atan2(std::sin(preheading - orientation), std::cos(preheading - orientation));
+            RCLCPP_INFO(this->get_logger(), "Desired Heading: %f°, Current Heading: %f°, Heading Error: %f°",
+                        rad2deg(target_heading), rad2deg(yaw), rad2deg(heading_error));
+
             // Handle "zeroturn" behavior
             if (zeroturn) {
-                const double turn_threshold = 0.05;  // Threshold angle in radians
-                if (std::abs(heading) > turn_threshold) {
+                const double turn_threshold = deg2rad(2.0);  // 2 degrees in radians
+                if (std::abs(heading_error) > turn_threshold) {
                     // If the heading difference is significant, turn in place and avoid moving forward
-                    return {0.0, std::clamp(heading, -angle_max, angle_max), distance};
+                    double angular = std::clamp(heading_error, -angle_max, angle_max);
+                    return {0.0, angular, distance};
                 }
             }
-            // Clamp the angular velocity and linear velocity
-            double angular = std::clamp(heading, -angle_max, angle_max);
-            velocity = std::clamp(velocity, -velocity_max, velocity_max);
+
+            // Implement PID controller for heading correction
+            static double integral = 0.0;
+            static double previous_error = 0.0;
+            const double Kp = 1.0;  // Proportional gain
+            const double Ki = 0.0;  // Integral gain
+            const double Kd = 0.0;  // Derivative gain
+            const double dt = 0.1;  // Time step (assuming control loop runs at 10 Hz)
+
+            integral += heading_error * dt;
+            double derivative = (heading_error - previous_error) / dt;
+
+            double angular = Kp * heading_error + Ki * integral + Kd * derivative;
+            angular = std::clamp(angular, -angle_max, angle_max);
+            previous_error = heading_error;
+
+            // Scale the linear velocity based on distance
+            double velocity = std::clamp(velocity_scale * distance, 0.0, velocity_max);
+
+            // Reduce linear velocity if heading error is large
+            const double max_heading_error_for_full_speed = deg2rad(10.0);  // 10 degrees in radians
+            if (std::abs(heading_error) > max_heading_error_for_full_speed) {
+                velocity *= max_heading_error_for_full_speed / std::abs(heading_error);
+            }
+
             return {velocity, angular, distance};
         }
-
 
         void stop_moving() {
             geometry_msgs::msg::Twist twist;
