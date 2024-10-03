@@ -87,6 +87,8 @@ class Navigator : public rclcpp::Node {
         rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr start_srv;
         rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr pause_srv;
         rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr stop_srv;
+        // Parameter callback handle
+        OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;
         
     public:
         Navigator(): Node("path_server",
@@ -94,30 +96,11 @@ class Navigator : public rclcpp::Node {
             .allow_undeclared_parameters(true)
             .automatically_declare_parameters_from_overrides(true)
         ) {
-            try {
-                name = this->get_parameter("name").as_string(); 
-                topic_prefix_param = this->get_parameter("topic_prefix").as_string();
-            } catch (...) {
-                name = "path_server";
-                topic_prefix_param = "/fb";
-            }
-
-            try {
-                max_linear_speed = this->get_parameter("max_linear_speed").as_double();
-                max_angular_speed = this->get_parameter("max_angular_speed").as_double();
-            } catch (...) {
-                RCLCPP_WARN(this->get_logger(), "Parameters max_linear_speed and max_angular_speed not found, using default");
-                max_linear_speed = 0.5;
-                max_angular_speed = 0.5;
-            }
-            RCLCPP_INFO(this->get_logger(), "Max linear speed: %f, Max angular speed: %f", max_linear_speed, max_angular_speed);
-
-            try {
-                autostart = this->get_parameter("autostart").as_bool();
-            } catch (...) {
-                autostart = false;
-                RCLCPP_WARN(this->get_logger(), "Autostart parameter not found, using default value of false");
-            }
+            this->get_parameter_or<std::string>("name", name, "path_server");
+            this->get_parameter_or<std::string>("topic_prefix", topic_prefix_param, "/fb");
+            this->get_parameter_or<float>("max_linear_speed", max_linear_speed, 0.5);
+            this->get_parameter_or<float>("max_angular_speed", max_angular_speed, 0.5);
+            this->get_parameter_or<bool>("autostart", autostart, false);
 
             state = RobotState::Idle;
 
@@ -140,9 +123,40 @@ class Navigator : public rclcpp::Node {
             stop_srv = this->create_service<std_srvs::srv::Trigger>(topic_prefix_param + "/nav/stop", std::bind(&Navigator::stop_callback, this, std::placeholders::_1, std::placeholders::_2));
             //timer
             path_timer = this->create_wall_timer(std::chrono::milliseconds(1000), std::bind(&Navigator::path_timer_callback, this));
+            // Register parameter change callback
+            param_callback_handle_ = this->add_on_set_parameters_callback(std::bind(&Navigator::on_parameter_change, this, std::placeholders::_1));
         }
     
     private:
+        rcl_interfaces::msg::SetParametersResult on_parameter_change(const std::vector<rclcpp::Parameter> & parameters) {
+            rcl_interfaces::msg::SetParametersResult result;
+            result.successful = true;
+            result.reason = "success";
+
+            for (const auto & param : parameters) {
+                if (param.get_name() == "max_linear_speed") {
+                    double new_value = param.as_double();
+                    if (new_value >= 0.0) {
+                        max_linear_speed = new_value;
+                        RCLCPP_INFO(this->get_logger(), "max_linear_speed updated to: %f", max_linear_speed);
+                    } else {
+                        result.successful = false;
+                        result.reason = "max_linear_speed must be non-negative";
+                    }
+                } else if (param.get_name() == "max_angular_speed") {
+                    double new_value = param.as_double();
+                    if (new_value >= 0.0) {
+                        max_angular_speed = new_value;
+                        RCLCPP_INFO(this->get_logger(), "max_angular_speed updated to: %f", max_angular_speed);
+                    } else {
+                        result.successful = false;
+                        result.reason = "max_angular_speed must be non-negative";
+                    }
+                }
+            }
+            return result;
+        }
+
         void sync_callback(const sensor_msgs::msg::NavSatFix::ConstSharedPtr& fix, const nav_msgs::msg::Odometry::ConstSharedPtr& odom) {
             // RCLCPP_INFO(this->get_logger(), "Sync callback");
             current_pose_ = odom->pose.pose;

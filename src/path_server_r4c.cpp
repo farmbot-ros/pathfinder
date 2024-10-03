@@ -384,6 +384,7 @@ class Navigator : public rclcpp::Node {
             twist.angular.z = 0.0;
             cmd_vel->publish(twist);
         }
+
         std::vector<geometry_msgs::msg::PoseStamped> path_setter(const std::vector<geometry_msgs::msg::PoseStamped>& poses){
             path_nav.poses.clear();
             for (const geometry_msgs::msg::PoseStamped& element : poses) {
@@ -395,6 +396,7 @@ class Navigator : public rclcpp::Node {
             inited_waypoints = true;
             return path_nav.poses;
         }
+
         void path_timer_callback(){
             path_nav.header.stamp = this->now();
             path_nav.header.frame_id = "map";
@@ -410,36 +412,12 @@ class Navigator : public rclcpp::Node {
 };
 
 
-class KeyHandler : public rclcpp::Node {
-    public:
-        KeyHandler(): Node("key_handler") {
-            auto callback = [this](char key) {
-                this->processKeyboardInput(key);
-            };
-            RCLCPP_INFO(this->get_logger(), "Press a key to continue...");
-            std::thread([callback]() {
-                char key;
-                while (std::cin >> key) {
-                    callback(key);
-                }
-            }).detach();
-        }
-
-        void processKeyboardInput(char key) {
-            RCLCPP_INFO(this->get_logger(), "Key Pressed: %c", key);
-            // Add your logic to handle the key press here
-        }
-};
-
-
 int main(int argc, char *argv[]) {
     rclcpp::init(argc, argv);
     rclcpp::executors::MultiThreadedExecutor executor;
     auto node = std::make_shared<Navigator>();
-    // auto key_handler = std::make_shared<KeyHandler>();
     try {
         executor.add_node(node);
-        // executor.add_node(key_handler);
         executor.spin();
     } catch (const std::exception &e) {
         RCLCPP_ERROR(node->get_logger(), e.what());
