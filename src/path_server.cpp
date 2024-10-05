@@ -58,8 +58,6 @@ class Navigator : public rclcpp::Node {
         std::shared_ptr<message_filters::Synchronizer<message_filters::sync_policies::ApproximateTime<sensor_msgs::msg::NavSatFix, nav_msgs::msg::Odometry>>> sync_;
         
         rclcpp::Time initial_time;
-        float max_linear_speed;
-        float max_angular_speed;
         std::string name;
         std::string topic_prefix_param;
         bool autostart;
@@ -97,28 +95,9 @@ class Navigator : public rclcpp::Node {
             .allow_undeclared_parameters(true)
             .automatically_declare_parameters_from_overrides(true)
         ) {
-            try {
-                name = this->get_parameter("name").as_string(); 
-                topic_prefix_param = this->get_parameter("topic_prefix").as_string();
-            } catch (...) {
-                name = "path_server";
-                topic_prefix_param = "/fb";
-            }
-            try {
-                max_linear_speed = this->get_parameter("max_linear_speed").as_double();
-                max_angular_speed = this->get_parameter("max_angular_speed").as_double();
-            } catch (...) {
-                RCLCPP_WARN(this->get_logger(), "Parameters max_linear_speed and max_angular_speed not found, using default");
-                max_linear_speed = 0.5;
-                max_angular_speed = 0.5;
-            }
-            RCLCPP_INFO(this->get_logger(), "Max linear speed: %f, Max angular speed: %f", max_linear_speed, max_angular_speed);
-            try {
-                autostart = this->get_parameter("autostart").as_bool();
-            } catch (...) {
-                autostart = true;
-                RCLCPP_WARN(this->get_logger(), "Autostart parameter not found, using default value of true");
-            }
+            name = this->get_parameter_or<std::string>("name", "path_server");
+            topic_prefix_param = this->get_parameter_or<std::string>("topic_prefix", "/fb");
+            autostart = this->get_parameter_or<bool>("autostart", true);
             state = RobotState::Idle;
             //action server
             this->action_server_ = rclcpp_action::create_server<TheAction>(this, topic_prefix_param + "/nav/mission",
@@ -127,7 +106,7 @@ class Navigator : public rclcpp::Node {
                 std::bind(&Navigator::handle_accepted, this, std::placeholders::_1)
             );
             //action client
-            control_client_ = rclcpp_action::create_client<farmbot_interfaces::action::Control>(this, topic_prefix_param + "/nav/control");
+            control_client_ = rclcpp_action::create_client<farmbot_interfaces::action::Control>(this, topic_prefix_param + "/con/zeroturn");
             // subscribers
             fix_sub_.subscribe(this, topic_prefix_param + "/loc/fix");
             odom_sub_.subscribe(this, topic_prefix_param + "/loc/odom");
@@ -248,19 +227,15 @@ class Navigator : public rclcpp::Node {
             }
             for (auto a_pose: the_path) {
                 target_pose_ = a_pose.pose;
-                send_control_goal(target_pose_);
                 RCLCPP_INFO(this->get_logger(), "Going to: %f, %f, currently at: %f, %f", target_pose_.position.x, target_pose_.position.y, current_pose_.position.x, current_pose_.position.y);
-                controller_running = true;
+                controller_running = send_control_goal(target_pose_);
                 while (rclcpp::ok() && controller_running) {
                     if (goal_handle->is_canceling()) {
-                        result->success = std_msgs::msg::Bool();
-                        path_nav.poses.clear();
-                        stop_moving();
+                        fill_result_n_stop(result, false);
                         goal_handle->canceled(result);
                         return;
                     } else if (!goal_handle->is_active()){
-                        result->success = std_msgs::msg::Bool();
-                        stop_moving();
+                        fill_result_n_stop(result, false);
                         return;
                     }
 
@@ -272,12 +247,12 @@ class Navigator : public rclcpp::Node {
                             wait_rate.sleep();
                         }
                     } else if (state == RobotState::Stopped) {
-                        stop_moving();
-                        fill_result(result, false);
+                        // stop_moving();
+                        fill_result_n_stop(result, false);
                         goal_handle->abort(result);
-                        return;
+                        // return;
                     }
-                    // cmd_vel->publish(send_twist_);
+                    cmd_vel->publish(send_twist_);
                     fill_feedback(feedback, current_uuid_);
                     goal_handle->publish_feedback(feedback);
                     loop_rate.sleep();
@@ -286,11 +261,8 @@ class Navigator : public rclcpp::Node {
             }
             // Goal is done, send success message
             if (rclcpp::ok()) {
-                fill_result(result);
+                fill_result_n_stop(result);
                 goal_handle->succeed(result);
-                //stop moving and clear path
-                stop_moving();
-                path_nav.poses.clear();
                 RCLCPP_INFO(this->get_logger(), "Goal succeeded");
             }
         }
@@ -301,9 +273,12 @@ class Navigator : public rclcpp::Node {
             feedback->last_uuid.data = uuid;
         }
 
-        void fill_result(TheAction::Result::SharedPtr result, bool success=true){
+        void fill_result_n_stop(TheAction::Result::SharedPtr result, bool success=true){
             result->success.data = success;
             result->time_it_took = this->now() - initial_time;
+            path_nav.poses.clear();
+            stop_moving();
+            cancel_control_goal();
         }
 
         void stop_moving() {
@@ -325,7 +300,7 @@ class Navigator : public rclcpp::Node {
             return path_nav.poses;
         }
 
-        void send_control_goal(const geometry_msgs::msg::Pose& target_pose) {
+        bool send_control_goal(const geometry_msgs::msg::Pose& target_pose) {
             using ActionGoalHandle = rclcpp_action::ClientGoalHandle<farmbot_interfaces::action::Control>;
             // Wait for the action server to be ready
             while (!control_client_->wait_for_action_server(std::chrono::seconds(1)) && rclcpp::ok()) {
@@ -350,8 +325,6 @@ class Navigator : public rclcpp::Node {
                 controller_running = true;
                 send_twist_ = feedback->twist;
                 distance_to_target = feedback->distance.data;
-                //publish twist
-                cmd_vel->publish(send_twist_);
             };
             // Specify a callback for when the goal is complete
             send_goal_options.result_callback = [this](const ActionGoalHandle::WrappedResult & result) {
@@ -374,6 +347,13 @@ class Navigator : public rclcpp::Node {
             // Send the goal
             control_client_->async_send_goal(goal_msg, send_goal_options);
             RCLCPP_INFO(this->get_logger(), "Sending control goal to (%f, %f)", target_pose.position.x, target_pose.position.y);
+            return true;
+        }
+
+        void cancel_control_goal() {
+            if (control_client_->wait_for_action_server(std::chrono::seconds(1))) {
+                control_client_->async_cancel_all_goals();
+            }
         }
 
 };
