@@ -59,6 +59,7 @@ class Navigator : public rclcpp::Node {
 
         rclcpp::Time initial_time;
         std::string name;
+        std::string frame_id;
         bool autostart;
 
         // nav_msgs::msg::Path path_nav;
@@ -120,6 +121,9 @@ class Navigator : public rclcpp::Node {
             stop_srv = this->create_service<std_srvs::srv::Trigger>("nav/stop", std::bind(&Navigator::stop_callback, this, std::placeholders::_1, std::placeholders::_2));
             //timer
             path_timer = this->create_wall_timer(std::chrono::milliseconds(1000), std::bind(&Navigator::timer_callback, this));
+
+            frame_id = this->get_namespace();
+            frame_id += "/map";
         }
 
     private:
@@ -131,15 +135,15 @@ class Navigator : public rclcpp::Node {
 
         void timer_callback() {
             path_nav.header.stamp = this->now();
-            path_nav.header.frame_id = "map";
+            path_nav.header.frame_id = frame_id;
             if (inited_waypoints) {
                 nav_msgs::msg::Path path;
                 path.header.stamp = this->now();
-                path.header.frame_id = "map";
+                path.header.frame_id = frame_id;
                 for (const farmbot_interfaces::msg::Waypoint& element : path_nav.poses) {
                     geometry_msgs::msg::PoseStamped pose;
                     pose.header.stamp = this->now();
-                    pose.header.frame_id = "map";
+                    pose.header.frame_id = frame_id;
                     pose.pose = element.pose;
                     path.poses.push_back(pose);
                 }
@@ -291,7 +295,7 @@ class Navigator : public rclcpp::Node {
             for (const farmbot_interfaces::msg::Waypoint& element : poses) {
                 farmbot_interfaces::msg::Waypoint a_pose = element;
                 a_pose.header.stamp = this->now();
-                a_pose.header.frame_id = "map";
+                a_pose.header.frame_id = frame_id;
                 path_nav.poses.push_back(a_pose);
             }
             inited_waypoints = true;
