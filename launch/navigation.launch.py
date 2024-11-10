@@ -16,16 +16,12 @@ def launch_setup(context, *args, **kwargs):
 
     nodes_array = []
 
-    robs4crops = bool(yaml.safe_load(open(param_file))['global']['ros__parameters']['r4c'])
-    executable = 'path_server' if not robs4crops else 'path_server_r4c'
     path_server = Node(
         package='farmbot_navigation',
-        executable=executable,
+        executable="path_server",
         name='path_server',
         namespace=namespace,
         parameters=[
-            {"frame_prefix": namespace+"/"},
-            {"namespace": namespace},
             yaml.safe_load(open(param_file))['path_server']['ros__parameters'],
             yaml.safe_load(open(param_file))['global']['ros__parameters']
         ]
@@ -38,25 +34,21 @@ def launch_setup(context, *args, **kwargs):
         name='deadman',
         namespace=namespace,
         parameters=[
-            {"frame_prefix": namespace+"/"},
-            {"namespace": namespace},
             yaml.safe_load(open(param_file))['deadman']['ros__parameters'],
             yaml.safe_load(open(param_file))['global']['ros__parameters']
         ]
     )
-    if bool(yaml.safe_load(open(param_file))['global']['ros__parameters']['deadman']): 
+    if bool(yaml.safe_load(open(param_file))['global']['ros__parameters']['deadman']):
         nodes_array.append(deadman)
-    
+
     return nodes_array
 
 
-def generate_launch_description(): 
-    namespace_arg = DeclareLaunchArgument('namespace', default_value='fb')
-    antena_arg = DeclareLaunchArgument('double_antenna', default_value='True')
-    
+def generate_launch_description():
+    namespace_arg = DeclareLaunchArgument('namespace', default_value='fbot')
+
     return LaunchDescription([
         namespace_arg,
-        antena_arg, 
         OpaqueFunction(function = launch_setup)
         ]
     )

@@ -5,7 +5,6 @@
 class Deadman : public rclcpp::Node {
     private:
         std::string name;
-        std::string topic_prefix_param;
         std::string joystick_topic;
         int deadman_button;
         std::string start_topic_param;
@@ -26,14 +25,12 @@ class Deadman : public rclcpp::Node {
             .automatically_declare_parameters_from_overrides(true)
         ) {
             try {
-                name = this->get_parameter("name").as_string(); 
-                topic_prefix_param = this->get_parameter("topic_prefix").as_string();
+                name = this->get_parameter("name").as_string();
             } catch (...) {
                 name = "deadman";
-                topic_prefix_param = "/fb";
             }
 
-            joystick_topic = topic_prefix_param + "/joy";
+            joystick_topic = "joy";
             deadman_button = 4;
             try{
                 rclcpp::Parameter joy_param = this->get_parameter("joystick_topic");
@@ -44,8 +41,8 @@ class Deadman : public rclcpp::Node {
                 RCLCPP_WARN(this->get_logger(), "Could not find parameters: joy_topic, deadman_button, using defaults");
             }
 
-            start_topic_param = topic_prefix_param + "/nav/start";
-            pause_topic_param = topic_prefix_param + "/nav/pause";
+            start_topic_param = "nav/start";
+            pause_topic_param = "nav/pause";
             try {
                 rclcpp::Parameter start_topic = this->get_parameter("start_topic");
                 start_topic_param = start_topic.as_string();
@@ -57,7 +54,7 @@ class Deadman : public rclcpp::Node {
 
             deadman_timer = this->create_wall_timer(std::chrono::milliseconds(5), std::bind(&Deadman::deadman_timer_callback, this));
             joy_sub = this->create_subscription<sensor_msgs::msg::Joy>(joystick_topic, 10, std::bind(&Deadman::joy_callback, this, std::placeholders::_1));
-        
+
             start_srv_ = this->create_client<std_srvs::srv::Trigger>(start_topic_param);
             pause_srv_ = this->create_client<std_srvs::srv::Trigger>(pause_topic_param);
         }

@@ -17,7 +17,7 @@
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "std_msgs/msg/empty.hpp"
 #include "std_srvs/srv/trigger.hpp"
- 
+
 #include <iostream>
 #include <thread>
 #include <mutex>
@@ -56,10 +56,9 @@ class Navigator : public rclcpp::Node {
         message_filters::Subscriber<sensor_msgs::msg::NavSatFix> fix_sub_;
         message_filters::Subscriber<nav_msgs::msg::Odometry> odom_sub_;
         std::shared_ptr<message_filters::Synchronizer<message_filters::sync_policies::ApproximateTime<sensor_msgs::msg::NavSatFix, nav_msgs::msg::Odometry>>> sync_;
-        
+
         rclcpp::Time initial_time;
         std::string name;
-        std::string topic_prefix_param;
         bool autostart;
 
         // nav_msgs::msg::Path path_nav;
@@ -68,7 +67,7 @@ class Navigator : public rclcpp::Node {
         rclcpp::TimerBase::SharedPtr path_timer;
         rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub;
 
-        bool controller_running; 
+        bool controller_running;
         float distance_to_target;
         geometry_msgs::msg::Pose current_pose_;
         geometry_msgs::msg::Pose target_pose_;
@@ -88,7 +87,7 @@ class Navigator : public rclcpp::Node {
         rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr start_srv;
         rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr pause_srv;
         rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr stop_srv;
-        
+
     public:
         Navigator(): Node("path_server",
             rclcpp::NodeOptions()
@@ -96,34 +95,33 @@ class Navigator : public rclcpp::Node {
             .automatically_declare_parameters_from_overrides(true)
         ) {
             name = this->get_parameter_or<std::string>("name", "path_server");
-            topic_prefix_param = this->get_parameter_or<std::string>("topic_prefix", "/fb");
             autostart = this->get_parameter_or<bool>("autostart", true);
             state = RobotState::Idle;
             //action server
-            this->action_server_ = rclcpp_action::create_server<TheAction>(this, topic_prefix_param + "/nav/mission",
+            this->action_server_ = rclcpp_action::create_server<TheAction>(this, "nav/mission",
                 std::bind(&Navigator::handle_goal, this, std::placeholders::_1, std::placeholders::_2),
                 std::bind(&Navigator::handle_cancel, this, std::placeholders::_1),
                 std::bind(&Navigator::handle_accepted, this, std::placeholders::_1)
             );
             //action client
-            control_client_ = rclcpp_action::create_client<farmbot_interfaces::action::Control>(this, topic_prefix_param + "/con/zeroturn");
+            control_client_ = rclcpp_action::create_client<farmbot_interfaces::action::Control>(this, "con/zeroturn");
             // subscribers
-            fix_sub_.subscribe(this, topic_prefix_param + "/loc/fix");
-            odom_sub_.subscribe(this, topic_prefix_param + "/loc/odom");
+            fix_sub_.subscribe(this, "loc/fix");
+            odom_sub_.subscribe(this, "loc/odom");
             sync_ = std::make_shared<message_filters::Synchronizer<message_filters::sync_policies::ApproximateTime<sensor_msgs::msg::NavSatFix, nav_msgs::msg::Odometry>>>(10);
             sync_->connectInput(fix_sub_, odom_sub_);
             sync_->registerCallback(std::bind(&Navigator::sync_callback, this, std::placeholders::_1, std::placeholders::_2));
             //publishers
-            path_pub = this->create_publisher<nav_msgs::msg::Path>(topic_prefix_param + "/nav/path", 10);
-            cmd_vel = this->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
+            path_pub = this->create_publisher<nav_msgs::msg::Path>("nav/path", 10);
+            cmd_vel = this->create_publisher<geometry_msgs::msg::Twist>("cmd_vel", 10);
             //services
-            start_srv = this->create_service<std_srvs::srv::Trigger>(topic_prefix_param + "/nav/start", std::bind(&Navigator::start_callback, this, std::placeholders::_1, std::placeholders::_2));
-            pause_srv = this->create_service<std_srvs::srv::Trigger>(topic_prefix_param + "/nav/pause", std::bind(&Navigator::pause_callback, this, std::placeholders::_1, std::placeholders::_2));
-            stop_srv = this->create_service<std_srvs::srv::Trigger>(topic_prefix_param + "/nav/stop", std::bind(&Navigator::stop_callback, this, std::placeholders::_1, std::placeholders::_2));
+            start_srv = this->create_service<std_srvs::srv::Trigger>("nav/start", std::bind(&Navigator::start_callback, this, std::placeholders::_1, std::placeholders::_2));
+            pause_srv = this->create_service<std_srvs::srv::Trigger>("nav/pause", std::bind(&Navigator::pause_callback, this, std::placeholders::_1, std::placeholders::_2));
+            stop_srv = this->create_service<std_srvs::srv::Trigger>("nav/stop", std::bind(&Navigator::stop_callback, this, std::placeholders::_1, std::placeholders::_2));
             //timer
             path_timer = this->create_wall_timer(std::chrono::milliseconds(1000), std::bind(&Navigator::timer_callback, this));
         }
-    
+
     private:
         void sync_callback(const sensor_msgs::msg::NavSatFix::ConstSharedPtr& fix, const nav_msgs::msg::Odometry::ConstSharedPtr& odom) {
             // RCLCPP_INFO(this->get_logger(), "Sync callback");
