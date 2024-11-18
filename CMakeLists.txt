@@ -25,7 +25,6 @@ install(
 
 set(executables
   path_server
-  path_server_r4c
   deadman
 )
 
