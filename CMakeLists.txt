@@ -41,6 +41,7 @@ find_package(tf2_ros REQUIRED)
 find_package(message_filters REQUIRED)
 find_package(pcl_ros REQUIRED)
 find_package(pcl_conversions REQUIRED)
+find_package(diagnostic_msgs REQUIRED)
 find_package(diagnostic_updater REQUIRED)
 find_package(farmbot_interfaces REQUIRED)
 
@@ -56,6 +57,7 @@ set(dependencies_ros
   message_filters
   pcl_ros
   pcl_conversions
+  diagnostic_msgs
   diagnostic_updater
   farmbot_interfaces
 )

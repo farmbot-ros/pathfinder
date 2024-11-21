@@ -17,12 +17,15 @@
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "std_msgs/msg/empty.hpp"
 #include "std_srvs/srv/trigger.hpp"
+#include "diagnostic_updater/diagnostic_updater.hpp"
+#include "diagnostic_msgs/msg/diagnostic_status.hpp"
 
 #include <iostream>
 #include <thread>
 #include <mutex>
 #include <string>
 
+using namespace std::chrono_literals;
 
 enum class RobotState {
     Idle,
@@ -87,17 +90,24 @@ class Navigator : public rclcpp::Node {
         //services
         rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr start_srv;
         rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr pause_srv;
-        rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr stop_srv;
+        rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr stop_srv;        //Diagnostic Updater
+
+        //diagnostic
+        diagnostic_updater::Updater updater_;
+        diagnostic_msgs::msg::DiagnosticStatus status;
+        rclcpp::TimerBase::SharedPtr diagnostic_timer_;
 
     public:
         Navigator(): Node("path_server",
             rclcpp::NodeOptions()
             .allow_undeclared_parameters(true)
             .automatically_declare_parameters_from_overrides(true)
-        ) {
+        ), updater_(this) {
             name = this->get_parameter_or<std::string>("name", "path_server");
             autostart = this->get_parameter_or<bool>("autostart", true);
             state = RobotState::Idle;
+            status.level = diagnostic_msgs::msg::DiagnosticStatus::WARN;
+            status.message = "Not initialized";
             //action server
             this->action_server_ = rclcpp_action::create_server<TheAction>(this, "nav/mission",
                 std::bind(&Navigator::handle_goal, this, std::placeholders::_1, std::placeholders::_2),
@@ -126,9 +136,22 @@ class Navigator : public rclcpp::Node {
             if (!namespace_.empty() && namespace_[0] == '/') {
                 namespace_ = namespace_.substr(1); // Remove leading slash
             }
+
+            // Diagnostic Updater
+            updater_.setHardwareID(static_cast<std::string>(this->get_namespace()) + "/nav");
+            updater_.add("Navigation Status", this, &Navigator::check_system);
+            diagnostic_timer_ = this->create_wall_timer(1s, std::bind(&Navigator::diagnostic_callback, this));
         }
 
     private:
+        void diagnostic_callback() {
+            updater_.force_update();
+        }
+
+        void check_system(diagnostic_updater::DiagnosticStatusWrapper &stat) {
+            stat.summary(status.level, status.message);
+        }
+
         void sync_callback(const sensor_msgs::msg::NavSatFix::ConstSharedPtr& fix, const nav_msgs::msg::Odometry::ConstSharedPtr& odom) {
             // RCLCPP_INFO(this->get_logger(), "Sync callback");
             current_pose_ = odom->pose.pose;
@@ -234,6 +257,8 @@ class Navigator : public rclcpp::Node {
                 RCLCPP_INFO(this->get_logger(), "Going to: %f, %f, currently at: %f, %f", target_pose_.position.x, target_pose_.position.y, current_pose_.position.x, current_pose_.position.y);
                 controller_running = send_control_goal(target_pose_);
                 while (rclcpp::ok() && controller_running) {
+                    status.level = diagnostic_msgs::msg::DiagnosticStatus::OK;
+                    status.message = "Moving to goal";
                     if (goal_handle->is_canceling()) {
                         fill_result_n_stop(result, false);
                         goal_handle->canceled(result);
