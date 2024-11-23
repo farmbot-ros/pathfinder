@@ -13,6 +13,7 @@
 
 #include "farmbot_interfaces/action/waypoints.hpp"
 #include "farmbot_interfaces/action/control.hpp"
+#include "farmbot_interfaces/srv/trigger.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "std_msgs/msg/empty.hpp"
@@ -21,6 +22,7 @@
 #include "diagnostic_msgs/msg/diagnostic_status.hpp"
 
 #include <iostream>
+#include <rclcpp_action/server_goal_handle.hpp>
 #include <thread>
 #include <mutex>
 #include <string>
@@ -52,6 +54,8 @@ float rad2deg(float rad) {
     return rad * 180 / M_PI;
 }
 
+using namespace std::placeholders;
+using Trigger = farmbot_interfaces::srv::Trigger;
 
 class Navigator : public rclcpp::Node {
     private:
@@ -79,18 +83,19 @@ class Navigator : public rclcpp::Node {
         geometry_msgs::msg::Twist send_twist_;
         std::string current_uuid_ = "ZER0";
         rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel;
+
         //action_server
-        using TheAction = farmbot_interfaces::action::Waypoints;
-        using GoalHandle = rclcpp_action::ServerGoalHandle<TheAction>;
-        std::shared_ptr<GoalHandle> handeler_;
-        rclcpp_action::Server<TheAction>::SharedPtr action_server_;
+        using Waypoints = farmbot_interfaces::action::Waypoints;
+        std::shared_ptr<rclcpp_action::ServerGoalHandle<Waypoints>> handeler_;
+        rclcpp_action::Server<Waypoints>::SharedPtr action_server_;
+
         //action_client
         rclcpp_action::Client<farmbot_interfaces::action::Control>::SharedPtr control_client_;
 
         //services
-        rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr start_srv;
-        rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr pause_srv;
-        rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr stop_srv;        //Diagnostic Updater
+        rclcpp::Service<Trigger>::SharedPtr start_srv;
+        rclcpp::Service<Trigger>::SharedPtr pause_srv;
+        rclcpp::Service<Trigger>::SharedPtr stop_srv;        //Diagnostic Updater
 
         //diagnostic
         diagnostic_updater::Updater updater_;
@@ -109,10 +114,10 @@ class Navigator : public rclcpp::Node {
             status.level = diagnostic_msgs::msg::DiagnosticStatus::WARN;
             status.message = "Not initialized";
             //action server
-            this->action_server_ = rclcpp_action::create_server<TheAction>(this, "nav/mission",
-                std::bind(&Navigator::handle_goal, this, std::placeholders::_1, std::placeholders::_2),
-                std::bind(&Navigator::handle_cancel, this, std::placeholders::_1),
-                std::bind(&Navigator::handle_accepted, this, std::placeholders::_1)
+            this->action_server_ = rclcpp_action::create_server<Waypoints>(this, "nav/mission",
+                std::bind(&Navigator::handle_goal, this, _1, _2),
+                std::bind(&Navigator::handle_cancel, this, _1),
+                std::bind(&Navigator::handle_accepted, this, _1)
             );
             //action client
             control_client_ = rclcpp_action::create_client<farmbot_interfaces::action::Control>(this, "con/zeroturn");
@@ -121,14 +126,14 @@ class Navigator : public rclcpp::Node {
             odom_sub_.subscribe(this, "loc/odom");
             sync_ = std::make_shared<message_filters::Synchronizer<message_filters::sync_policies::ApproximateTime<sensor_msgs::msg::NavSatFix, nav_msgs::msg::Odometry>>>(10);
             sync_->connectInput(fix_sub_, odom_sub_);
-            sync_->registerCallback(std::bind(&Navigator::sync_callback, this, std::placeholders::_1, std::placeholders::_2));
+            sync_->registerCallback(std::bind(&Navigator::sync_callback, this, _1, _2));
             //publishers
             path_pub = this->create_publisher<nav_msgs::msg::Path>("nav/path", 10);
             cmd_vel = this->create_publisher<geometry_msgs::msg::Twist>("cmd_vel", 10);
             //services
-            start_srv = this->create_service<std_srvs::srv::Trigger>("nav/start", std::bind(&Navigator::start_callback, this, std::placeholders::_1, std::placeholders::_2));
-            pause_srv = this->create_service<std_srvs::srv::Trigger>("nav/pause", std::bind(&Navigator::pause_callback, this, std::placeholders::_1, std::placeholders::_2));
-            stop_srv = this->create_service<std_srvs::srv::Trigger>("nav/stop", std::bind(&Navigator::stop_callback, this, std::placeholders::_1, std::placeholders::_2));
+            start_srv = this->create_service<Trigger>("nav/start", std::bind(&Navigator::start_callback, this, _1, _2));
+            pause_srv = this->create_service<Trigger>("nav/pause", std::bind(&Navigator::pause_callback, this, _1, _2));
+            stop_srv = this->create_service<Trigger>("nav/stop", std::bind(&Navigator::stop_callback, this, _1, _2));
             //timer
             path_timer = this->create_wall_timer(std::chrono::milliseconds(1000), std::bind(&Navigator::timer_callback, this));
 
@@ -176,58 +181,52 @@ class Navigator : public rclcpp::Node {
             }
         }
 
-        void start_callback(const std::shared_ptr<std_srvs::srv::Trigger::Request> request, std::shared_ptr<std_srvs::srv::Trigger::Response> response){
-            (void)request;
+        void start_callback(const std::shared_ptr<Trigger::Request> request, std::shared_ptr<Trigger::Response> response){
+            (void)request; (void) response;
             state = RobotState::Running;
-            response->success = true;
-            response->message = "Started";
         }
 
-        void pause_callback(const std::shared_ptr<std_srvs::srv::Trigger::Request> request, std::shared_ptr<std_srvs::srv::Trigger::Response> response){
-            (void)request;
+        void pause_callback(const std::shared_ptr<Trigger::Request> request, std::shared_ptr<Trigger::Response> response){
+            (void)request; (void) response;
             state = RobotState::Paused;
-            response->success = true;
-            response->message = "Paused";
         }
 
-        void stop_callback(const std::shared_ptr<std_srvs::srv::Trigger::Request> request, std::shared_ptr<std_srvs::srv::Trigger::Response> response){
-            (void)request;
+        void stop_callback(const std::shared_ptr<Trigger::Request> request, std::shared_ptr<Trigger::Response> response){
+            (void)request; (void) response;
             state = RobotState::Stopped;
-            response->success = true;
-            response->message = "Stopped";
         }
 
-        rclcpp_action::GoalResponse handle_goal(const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const TheAction::Goal> goal){
-            goal->mission.poses;
+        rclcpp_action::GoalResponse handle_goal(const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const Waypoints::Goal> goal){
+            // goal->mission.poses;
             RCLCPP_INFO(this->get_logger(), "Received goal request");
             (void)uuid;
             return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
         }
 
-        rclcpp_action::CancelResponse handle_cancel(const std::shared_ptr<GoalHandle> goal_handle){
+        rclcpp_action::CancelResponse handle_cancel(const std::shared_ptr<rclcpp_action::ServerGoalHandle<Waypoints>> goal_handle){
             RCLCPP_INFO(this->get_logger(), "Received request to cancel goal");
             (void)goal_handle;
             return rclcpp_action::CancelResponse::ACCEPT;
         }
 
-        void handle_accepted(const std::shared_ptr<GoalHandle> goal_handle){
+        void handle_accepted(const std::shared_ptr<rclcpp_action::ServerGoalHandle<Waypoints>> goal_handle){
             if (handeler_ && handeler_->is_active()) {
                 RCLCPP_INFO(this->get_logger(), "ABORTING PREVIOUS GOAL...");
                 path_nav.poses.clear();
                 stop_moving();
-                handeler_->abort(std::make_shared<TheAction::Result>());
+                handeler_->abort(std::make_shared<Waypoints::Result>());
             }
             handeler_ = goal_handle;
             // this needs to return quickly to avoid blocking the executor, so spin up a new thread
-            std::thread{std::bind(&Navigator::execute, this, std::placeholders::_1), goal_handle}.detach();
+            std::thread{std::bind(&Navigator::execute, this, _1), goal_handle}.detach();
         }
 
-        void execute(const std::shared_ptr<GoalHandle> goal_handle){
+        void execute(const std::shared_ptr<rclcpp_action::ServerGoalHandle<Waypoints>> goal_handle){
             initial_time = this->now();
             // RCLCPP_INFO(this->get_logger(), "Executing goal");
             const auto goal = goal_handle->get_goal();
-            auto feedback = std::make_shared<TheAction::Feedback>();
-            auto result = std::make_shared<TheAction::Result>();
+            auto feedback = std::make_shared<Waypoints::Feedback>();
+            auto result = std::make_shared<Waypoints::Result>();
 
             rclcpp::Rate wait_rate(1000);
             while(state == RobotState::Idle){
@@ -296,13 +295,13 @@ class Navigator : public rclcpp::Node {
             }
         }
 
-        void fill_feedback(TheAction::Feedback::SharedPtr feedback, std::string uuid="00"){
+        void fill_feedback(Waypoints::Feedback::SharedPtr feedback, std::string uuid="00"){
             feedback->pose = current_pose_;
             feedback->gps = current_gps_;
             feedback->last_uuid.data = uuid;
         }
 
-        void fill_result_n_stop(TheAction::Result::SharedPtr result, bool success=true){
+        void fill_result_n_stop(Waypoints::Result::SharedPtr result, bool success=true){
             result->success.data = success;
             result->time_it_took = this->now() - initial_time;
             path_nav.poses.clear();
