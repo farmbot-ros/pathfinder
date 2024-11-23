@@ -11,7 +11,7 @@
 #include "message_filters/synchronizer.h"
 #include "message_filters/sync_policies/approximate_time.h"
 
-#include "farmbot_interfaces/action/waypoints.hpp"
+#include "farmbot_interfaces/action/segments.hpp"
 #include "farmbot_interfaces/action/control.hpp"
 #include "farmbot_interfaces/srv/trigger.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -21,6 +21,7 @@
 #include "diagnostic_updater/diagnostic_updater.hpp"
 #include "diagnostic_msgs/msg/diagnostic_status.hpp"
 
+#include <farmbot_interfaces/msg/detail/segments__struct.hpp>
 #include <iostream>
 #include <rclcpp_action/server_goal_handle.hpp>
 #include <thread>
@@ -71,7 +72,7 @@ class Navigator : public rclcpp::Node {
 
         // nav_msgs::msg::Path path_nav;
         RobotState state;
-        farmbot_interfaces::msg::Waypoints path_nav;
+        farmbot_interfaces::msg::Segments path_nav;
         rclcpp::TimerBase::SharedPtr path_timer;
         rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub;
 
@@ -85,9 +86,9 @@ class Navigator : public rclcpp::Node {
         rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel;
 
         //action_server
-        using Waypoints = farmbot_interfaces::action::Waypoints;
-        std::shared_ptr<rclcpp_action::ServerGoalHandle<Waypoints>> handeler_;
-        rclcpp_action::Server<Waypoints>::SharedPtr action_server_;
+        using Segments = farmbot_interfaces::action::Segments;
+        std::shared_ptr<rclcpp_action::ServerGoalHandle<Segments>> handeler_;
+        rclcpp_action::Server<Segments>::SharedPtr action_server_;
 
         //action_client
         rclcpp_action::Client<farmbot_interfaces::action::Control>::SharedPtr control_client_;
@@ -114,7 +115,7 @@ class Navigator : public rclcpp::Node {
             status.level = diagnostic_msgs::msg::DiagnosticStatus::WARN;
             status.message = "Not initialized";
             //action server
-            this->action_server_ = rclcpp_action::create_server<Waypoints>(this, "nav/mission",
+            this->action_server_ = rclcpp_action::create_server<Segments>(this, "nav/mission",
                 std::bind(&Navigator::handle_goal, this, _1, _2),
                 std::bind(&Navigator::handle_cancel, this, _1),
                 std::bind(&Navigator::handle_accepted, this, _1)
@@ -170,11 +171,11 @@ class Navigator : public rclcpp::Node {
                 nav_msgs::msg::Path path;
                 path.header.stamp = this->now();
                 path.header.frame_id = namespace_ + "/map";
-                for (const farmbot_interfaces::msg::Waypoint& element : path_nav.poses) {
+                for (const farmbot_interfaces::msg::Segment& element : path_nav.segments) {
                     geometry_msgs::msg::PoseStamped pose;
                     pose.header.stamp = this->now();
                     pose.header.frame_id = namespace_ + "/map";
-                    pose.pose = element.pose;
+                    pose.pose = element.origin.pose;
                     path.poses.push_back(pose);
                 }
                 path_pub->publish(path);
@@ -196,37 +197,37 @@ class Navigator : public rclcpp::Node {
             state = RobotState::Stopped;
         }
 
-        rclcpp_action::GoalResponse handle_goal(const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const Waypoints::Goal> goal){
+        rclcpp_action::GoalResponse handle_goal(const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const Segments::Goal> goal){
             // goal->mission.poses;
             RCLCPP_INFO(this->get_logger(), "Received goal request");
             (void)uuid;
             return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
         }
 
-        rclcpp_action::CancelResponse handle_cancel(const std::shared_ptr<rclcpp_action::ServerGoalHandle<Waypoints>> goal_handle){
+        rclcpp_action::CancelResponse handle_cancel(const std::shared_ptr<rclcpp_action::ServerGoalHandle<Segments>> goal_handle){
             RCLCPP_INFO(this->get_logger(), "Received request to cancel goal");
             (void)goal_handle;
             return rclcpp_action::CancelResponse::ACCEPT;
         }
 
-        void handle_accepted(const std::shared_ptr<rclcpp_action::ServerGoalHandle<Waypoints>> goal_handle){
+        void handle_accepted(const std::shared_ptr<rclcpp_action::ServerGoalHandle<Segments>> goal_handle){
             if (handeler_ && handeler_->is_active()) {
                 RCLCPP_INFO(this->get_logger(), "ABORTING PREVIOUS GOAL...");
-                path_nav.poses.clear();
+                path_nav.segments.clear();
                 stop_moving();
-                handeler_->abort(std::make_shared<Waypoints::Result>());
+                handeler_->abort(std::make_shared<Segments::Result>());
             }
             handeler_ = goal_handle;
             // this needs to return quickly to avoid blocking the executor, so spin up a new thread
             std::thread{std::bind(&Navigator::execute, this, _1), goal_handle}.detach();
         }
 
-        void execute(const std::shared_ptr<rclcpp_action::ServerGoalHandle<Waypoints>> goal_handle){
+        void execute(const std::shared_ptr<rclcpp_action::ServerGoalHandle<Segments>> goal_handle){
             initial_time = this->now();
             // RCLCPP_INFO(this->get_logger(), "Executing goal");
             const auto goal = goal_handle->get_goal();
-            auto feedback = std::make_shared<Waypoints::Feedback>();
-            auto result = std::make_shared<Waypoints::Result>();
+            auto feedback = std::make_shared<Segments::Feedback>();
+            auto result = std::make_shared<Segments::Result>();
 
             rclcpp::Rate wait_rate(1000);
             while(state == RobotState::Idle){
@@ -241,10 +242,10 @@ class Navigator : public rclcpp::Node {
             }
 
             rclcpp::Rate loop_rate(10);
-            std::vector<farmbot_interfaces::msg::Waypoint> the_path = path_setter(goal->mission.poses);
+            std::vector<farmbot_interfaces::msg::Segment> the_path = path_setter(goal->mission.segments);
             //if the first point is 1 meter to current position, skip it
             if (the_path.size() > 0) {
-                target_pose_ = the_path[0].pose;
+                target_pose_ = the_path[0].origin.pose;
                 double dx = target_pose_.position.x - current_pose_.position.x;
                 double dy = target_pose_.position.y - current_pose_.position.y;
                 if (std::hypot(dx, dy) < 1.0) {
@@ -252,7 +253,7 @@ class Navigator : public rclcpp::Node {
                 }
             }
             for (auto a_pose: the_path) {
-                target_pose_ = a_pose.pose;
+                target_pose_ = a_pose.origin.pose;
                 RCLCPP_INFO(this->get_logger(), "Going to: %f, %f, currently at: %f, %f", target_pose_.position.x, target_pose_.position.y, current_pose_.position.x, current_pose_.position.y);
                 controller_running = send_control_goal(target_pose_);
                 while (rclcpp::ok() && controller_running) {
@@ -285,7 +286,6 @@ class Navigator : public rclcpp::Node {
                     goal_handle->publish_feedback(feedback);
                     loop_rate.sleep();
                 }
-                current_uuid_ = a_pose.uuid.data;
             }
             // Goal is done, send success message
             if (rclcpp::ok()) {
@@ -295,15 +295,15 @@ class Navigator : public rclcpp::Node {
             }
         }
 
-        void fill_feedback(Waypoints::Feedback::SharedPtr feedback, std::string uuid="00"){
+        void fill_feedback(Segments::Feedback::SharedPtr feedback, std::string uuid="00"){
             feedback->state.position = current_pose_.position;
             feedback->state.orientation = current_pose_.orientation;
             feedback->state.gps = current_gps_;
         }
 
-        void fill_result_n_stop(Waypoints::Result::SharedPtr result, bool success=true){
+        void fill_result_n_stop(Segments::Result::SharedPtr result, bool success=true){
             result->time_it_took = this->now() - initial_time;
-            path_nav.poses.clear();
+            path_nav.segments.clear();
             stop_moving();
             cancel_control_goal();
         }
@@ -315,16 +315,16 @@ class Navigator : public rclcpp::Node {
             cmd_vel->publish(twist);
         }
 
-        std::vector<farmbot_interfaces::msg::Waypoint> path_setter(const std::vector<farmbot_interfaces::msg::Waypoint>& poses){
-            path_nav.poses.clear();
-            for (const farmbot_interfaces::msg::Waypoint& element : poses) {
-                farmbot_interfaces::msg::Waypoint a_pose = element;
+        std::vector<farmbot_interfaces::msg::Segment> path_setter(const std::vector<farmbot_interfaces::msg::Segment>& poses){
+            path_nav.segments.clear();
+            for (const farmbot_interfaces::msg::Segment& element : poses) {
+                farmbot_interfaces::msg::Segment a_pose = element;
                 a_pose.header.stamp = this->now();
                 a_pose.header.frame_id = namespace_ + "/map";
-                path_nav.poses.push_back(a_pose);
+                path_nav.segments.push_back(a_pose);
             }
             inited_waypoints = true;
-            return path_nav.poses;
+            return path_nav.segments;
         }
 
         bool send_control_goal(const geometry_msgs::msg::Pose& target_pose) {

@@ -25,6 +25,7 @@ install(
 
 set(executables
   path_server
+  segment_server
   deadman
 )
 
