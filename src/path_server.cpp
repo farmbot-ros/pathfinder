@@ -67,6 +67,7 @@ class Navigator : public rclcpp::Node {
         rclcpp::Time initial_time;
         std::string name;
         std::string namespace_;
+        std::string controller_;
         bool autostart;
 
         // nav_msgs::msg::Path path_nav;
@@ -110,6 +111,9 @@ class Navigator : public rclcpp::Node {
         ), updater_(this) {
             name = this->get_parameter_or<std::string>("name", "path_server");
             autostart = this->get_parameter_or<bool>("autostart", true);
+            controller_ = this->get_parameter_or<std::string>("controller", "zeroturn");
+            RCLCPP_INFO(this->get_logger(), "Starting %s with controller %s", name.c_str(), controller_.c_str());
+
             state = RobotState::Idle;
             status.level = diagnostic_msgs::msg::DiagnosticStatus::WARN;
             status.message = "Not initialized";
@@ -120,7 +124,7 @@ class Navigator : public rclcpp::Node {
                 std::bind(&Navigator::handle_accepted, this, _1)
             );
             //action client
-            control_client_ = rclcpp_action::create_client<farmbot_interfaces::action::Control>(this, "con/zeroturn");
+            control_client_ = rclcpp_action::create_client<farmbot_interfaces::action::Control>(this, "con/" + controller_);
             // subscribers
             fix_sub_.subscribe(this, "loc/fix");
             odom_sub_.subscribe(this, "loc/odom");
