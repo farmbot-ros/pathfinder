@@ -13,12 +13,12 @@ from launch.actions import OpaqueFunction
 def launch_setup(context, *args, **kwargs):
     namespace = LaunchConfiguration('namespace').perform(context)
     controller = LaunchConfiguration('controller').perform(context)
-    param_file = os.path.join(get_package_share_directory('farmbot_navigation'), 'config', 'params.yaml')
+    param_file = os.path.join(get_package_share_directory('farmbot_pathfinder'), 'config', 'params.yaml')
 
     nodes_array = []
 
     path_server = Node(
-        package='farmbot_navigation',
+        package='farmbot_pathfinder',
         executable="path_server",
         name='path_server',
         namespace=namespace,
@@ -31,7 +31,7 @@ def launch_setup(context, *args, **kwargs):
     nodes_array.append(path_server)
 
     deadman = Node(
-        package='farmbot_navigation',
+        package='farmbot_pathfinder',
         executable='deadman',
         name='deadman',
         namespace=namespace,

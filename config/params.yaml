@@ -10,7 +10,7 @@ path_server:
         max_angular_speed: 1.14
         odom_topic: "odom"
         fix_topic: "gps"
-        controller: "predictmod" # "predictmod", "zeroturn"
+        controller: "zeroturn" # "predictmod", "zeroturn"
 
 deadman:
     ros__parameters:
